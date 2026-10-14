@@ -1,0 +1,45 @@
+[build-system]
+requires = ["setuptools>=69"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "ctf-prep-bot"
+version = "0.1.0"
+description = "Self-hosted, single-owner Telegram bot for CTF preparation"
+readme = "README.md"
+license = "MIT"
+requires-python = ">=3.11"
+dependencies = [
+    "python-telegram-bot[job-queue]==22.8",
+    "python-dotenv==1.2.4",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest==9.1.1",
+    "pytest-asyncio==1.4.0",
+    "ruff==0.17.0",
+    "pre-commit==4.7.0",
+]
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+# E/F/W: errors, I: import order, B: bugbear, UP: modern syntax,
+# S: bandit security checks, ANN: type hints required, SIM: simplifications.
+select = ["E", "F", "W", "I", "B", "UP", "S", "ANN", "SIM"]
+
+[tool.ruff.lint.per-file-ignores]
+# Plain assert is how pytest works.
+"tests/**" = ["S101"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"
