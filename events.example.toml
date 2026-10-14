@@ -1,0 +1,28 @@
+# Manual events: CTFs that are not listed on CTFtime.
+#
+#   cp events.example.toml events.toml      (events.toml is git-ignored)
+#
+# Each CTF is one [[event]] table with these keys:
+#   title   required  text
+#   start   required  date-time WITH a UTC offset and NO quotes, e.g. 2026-11-07T09:00:00+03:00
+#   finish  required  same format as start, not before start
+#   url     optional  must start with http:// or https://
+#
+# The bot validates this file at startup and refuses to start if an entry is wrong.
+# Restart the bot after editing.
+#
+# !!! The dates and links below are OBVIOUS PLACEHOLDERS (year 2099, example.com). !!!
+# !!! They are NOT the real dates. Confirm the real dates and official links with   !!!
+# !!! the organisers before you rely on them.                                       !!!
+
+[[event]]
+title = "CyberGame Kenya"
+start = 2099-01-01T09:00:00+03:00
+finish = 2099-01-01T17:00:00+03:00
+url = "https://example.com/replace-with-official-cybergame-kenya-link"
+
+[[event]]
+title = "Safaricom CTF"
+start = 2099-01-02T09:00:00+03:00
+finish = 2099-01-03T09:00:00+03:00
+url = "https://example.com/replace-with-official-safaricom-ctf-link"
