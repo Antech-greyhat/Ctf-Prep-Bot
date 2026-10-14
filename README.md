@@ -35,7 +35,7 @@ machine running it needs only outbound HTTPS.
      ```
 3. **Install.**
    ```bash
-   git clone https://github.com/your-username/ctf-prep-bot.git
+   git clone https://github.com/Antech-greyhat/ctf-prep-bot.git
    cd ctf-prep-bot
    python3 -m venv .venv
    source .venv/bin/activate          # Windows: .venv\Scripts\activate
