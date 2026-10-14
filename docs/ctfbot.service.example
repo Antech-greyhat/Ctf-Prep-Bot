@@ -1,0 +1,53 @@
+# systemd unit for ctf-prep-bot. Example setup on a Linux VM:
+#
+#   sudo useradd --system --home-dir /opt/ctf-prep-bot --shell /usr/sbin/nologin ctfbot
+#   sudo git clone https://github.com/Antech-greyhat/ctf-prep-bot /opt/ctf-prep-bot
+#   cd /opt/ctf-prep-bot
+#   sudo python3 -m venv .venv && sudo .venv/bin/pip install .
+#   sudo cp .env.example .env            # then edit it
+#   sudo cp events.example.toml events.toml   # then edit it
+#   sudo chown -R root:ctfbot /opt/ctf-prep-bot
+#   sudo chown ctfbot:ctfbot .env && sudo chmod 600 .env
+#   sudo cp docs/ctfbot.service.example /etc/systemd/system/ctfbot.service
+#   sudo systemctl daemon-reload && sudo systemctl enable --now ctfbot
+#   journalctl -u ctfbot -f              # view logs
+#
+# Note: systemd's EnvironmentFile does not support inline comments ("KEY=value # note").
+# Keep comments on their own lines in .env.
+
+[Unit]
+Description=ctf-prep-bot (Telegram CTF alerts)
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=simple
+User=ctfbot
+Group=ctfbot
+WorkingDirectory=/opt/ctf-prep-bot
+# Real environment variables; python-dotenv will not override them.
+EnvironmentFile=/opt/ctf-prep-bot/.env
+ExecStart=/opt/ctf-prep-bot/.venv/bin/python -m ctfbot
+Restart=on-failure
+RestartSec=10
+# Exit code 2 means bad configuration. Restarting cannot fix that, so do not loop.
+RestartPreventExitStatus=2
+
+# Hardening: the bot only needs outbound HTTPS and read access to its own directory.
+NoNewPrivileges=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+# AF_UNIX is kept because some DNS setups (e.g. systemd-resolved's NSS module) need it.
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+RestrictNamespaces=true
+LockPersonality=true
+CapabilityBoundingSet=
+UMask=0077
+
+[Install]
+WantedBy=multi-user.target
