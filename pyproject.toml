@@ -4,8 +4,8 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "ctf-prep-bot"
-version = "0.1.0"
-description = "Self-hosted, single-owner Telegram bot for CTF preparation"
+version = "0.2.0"
+description = "Self-hosted, single-owner Telegram bot for CTF preparation: event alerts and a writeup log"
 readme = "README.md"
 license = "MIT"
 requires-python = ">=3.11"

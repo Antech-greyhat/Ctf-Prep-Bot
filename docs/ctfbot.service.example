@@ -8,6 +8,7 @@
 #   sudo cp events.example.toml events.toml   # then edit it
 #   sudo chown -R root:ctfbot /opt/ctf-prep-bot
 #   sudo chown ctfbot:ctfbot .env && sudo chmod 600 .env
+#   sudo install -d -o ctfbot -g ctfbot -m 700 data   # the only folder the bot may write to
 #   sudo cp docs/ctfbot.service.example /etc/systemd/system/ctfbot.service
 #   sudo systemctl daemon-reload && sudo systemctl enable --now ctfbot
 #   journalctl -u ctfbot -f              # view logs
@@ -16,7 +17,7 @@
 # Keep comments on their own lines in .env.
 
 [Unit]
-Description=ctf-prep-bot (Telegram CTF alerts)
+Description=ctf-prep-bot (Telegram CTF prep bot)
 Wants=network-online.target
 After=network-online.target
 
@@ -33,7 +34,10 @@ RestartSec=10
 # Exit code 2 means bad configuration. Restarting cannot fix that, so do not loop.
 RestartPreventExitStatus=2
 
-# Hardening: the bot only needs outbound HTTPS and read access to its own directory.
+# Hardening: the bot only needs outbound HTTPS, read access to its own directory and write
+# access to data/ (the SQLite database). ProtectSystem=strict makes everything else read-only.
+# The folder must exist before the service starts (see the install -d step above).
+ReadWritePaths=/opt/ctf-prep-bot/data
 NoNewPrivileges=true
 PrivateTmp=true
 PrivateDevices=true

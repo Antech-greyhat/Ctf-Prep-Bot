@@ -58,25 +58,37 @@
 <!-- ABOUT THE PROJECT -->
 ## About The Project
 
-Finding the next CTF to play means checking CTFtime, local community channels and event pages
-by hand. ctf-prep-bot does that for you and sends the result to Telegram.
+Getting better at CTFs takes two habits: finding the next CTF to play, and practising in
+between while writing down what you learned. ctf-prep-bot helps with both, from Telegram.
 
 You run your own instance with your own bot token, and it answers **only you**.
 
-Features:
+**Event alerts**
 * **`/events`** lists CTFs starting in the next 14 days (configurable). It merges
   [CTFtime](https://ctftime.org) with your own list of events that CTFtime does not have
   (for example CyberGame Kenya or Safaricom CTF), removes duplicates, sorts by start time and
   shows times in your timezone.
 * **Weekly digest** of the same list on the day and time you choose.
 * **`/digest`** sends the digest immediately.
-* **`python -m ctfbot --whoami`** tells you your numeric Telegram user ID.
+* **Reminders** a set number of hours (default 24) before each CTF starts.
+
+**Writeup log**
+* **`/log`** walks you through recording a challenge you solved *or attempted*: platform,
+  challenge, category, result, how you solved it (or what you tried) and where you got stuck.
+  Categories and the result are buttons. Flag-shaped text is removed before saving.
+* **`/recent`**, **`/show <id>`** and **`/delete <id>`** to read back and manage entries.
+* **`/stats`** shows progress per category against your own *fundamentals-first* order, names
+  the category to focus on, and warns you when you keep jumping ahead of it.
+* **Inactivity nudge** after a few days without a writeup, naming your current focus.
+
+And **`python -m ctfbot --whoami`** tells you your numeric Telegram user ID.
 
 CTFtime events are filtered to **online, Jeopardy-format, open-to-everyone** CTFs. The filters
 are constants at the top of [`src/ctfbot/ctftime.py`](src/ctfbot/ctftime.py).
 
-There is no database, no Docker and no webhook. The bot uses long polling, so the machine
-running it needs only outbound HTTPS.
+There is no Docker and no webhook. Writeups live in a local SQLite file (Python's standard
+library, no database server). The bot uses long polling, so the machine running it needs only
+outbound HTTPS.
 
 <p align="right">(<a href="#readme-top">back to top</a>)</p>
 
@@ -112,6 +124,12 @@ running it needs only outbound HTTPS.
      help - What this bot can do
      events - CTFs starting soon
      digest - Send the weekly digest now
+     log - Record a challenge you solved or attempted
+     recent - Your latest writeups
+     show - Read one writeup
+     delete - Delete one writeup
+     stats - Progress by category and your focus
+     cancel - Stop the current log
      ```
 3. **Clone and install.**
    ```sh
@@ -142,6 +160,10 @@ running it needs only outbound HTTPS.
    ```
    Replace the placeholder dates in `events.toml` with the real, confirmed dates, or delete
    entries you don't want. The bot validates this file at startup.
+
+   Optional: to change the category order used by `/log` and `/stats`, run
+   `cp categories.example.toml categories.toml` and edit it. Without that file the bot uses
+   General → Web → Forensics → Crypto → OSINT → Reversing → Pwn.
 7. **Run it.**
    ```sh
    python -m ctfbot
@@ -152,10 +174,15 @@ running it needs only outbound HTTPS.
      appears in the terminal.
    * `/events` lists upcoming events.
    * `/digest` sends the digest.
+   * `/log` walks you through a writeup, `/recent` lists it and `/stats` counts it.
+   * A `data/` folder now holds `ctfbot.db`, readable only by you: `ls -l data` shows
+     `-rw-------` (Linux/macOS).
 9. **Optional: run it 24/7 without Docker.** Use systemd with an unprivileged user,
    `WorkingDirectory` set to the repo, `EnvironmentFile` pointing to the 600-permission
    `.env`, and `Restart=on-failure`. A complete, hardened example with setup commands is in
-   [`docs/ctfbot.service.example`](docs/ctfbot.service.example).
+   [`docs/ctfbot.service.example`](docs/ctfbot.service.example). The service can write only
+   to the `data/` folder, where the database lives; create it first with
+   `sudo install -d -o ctfbot -g ctfbot -m 700 data`.
 10. **If the token ever leaks:** send `/revoke` to @BotFather, put the new token in `.env` and
     restart the bot. Deleting a committed `.env` does **not** remove it from git history; the
     old token must be revoked.
@@ -171,6 +198,13 @@ running it needs only outbound HTTPS.
 | `/help` | Lists commands, the digest schedule and your timezone |
 | `/events` | CTFs starting within `LOOKAHEAD_DAYS` |
 | `/digest` | Sends the weekly digest now |
+| `/log` | Records a writeup, step by step |
+| `/recent` | Your 10 latest writeups with their IDs |
+| `/show <id>` | One writeup in full |
+| `/delete <id>` | Deletes one writeup, after asking you to confirm |
+| `/stats` | Progress per category, your focus, and a warning if you jump ahead |
+| `/cancel` | Stops the current `/log` (nothing is saved) |
+| `/skip` | During `/log`: skip "where did you get stuck" for a solved challenge |
 
 Example `/events` reply:
 
@@ -185,6 +219,28 @@ CTFtime
 Hack.lu CTF 2026
 Fri 23 Oct 21:00 → Sun 25 Oct 21:00 EAT (2d)
 CTFtime
+```
+
+Example `/stats` reply:
+
+```text
+Your progress
+Target: 10 solved per category, fundamentals first.
+
+General   ██████████  10/10 ✓
+Web       ████░░░░░░   4/10 +2 tried ← focus
+Forensics ░░░░░░░░░░   0/10
+Crypto    ░░░░░░░░░░   0/10 +1 tried
+OSINT     ░░░░░░░░░░   0/10
+Reversing ░░░░░░░░░░   0/10
+Pwn       █░░░░░░░░░   1/10
+
+🎯 Focus: Web, 6 more to solve.
+
+⚠️ You're jumping around: 3 of your 4 logs in the last 7 days were in Crypto, Pwn, well
+past your focus. Fundamentals first.
+
+Last writeup: yesterday. Logs in the last 7 days: 4.
 ```
 
 To print upcoming CTFtime events in the terminal without Telegram:
@@ -203,6 +259,28 @@ events only. Restart the bot after editing it.
 If a manual event has the same title (ignoring case and spacing) and start time as a CTFtime
 event, the manual entry is shown.
 
+### Writeups and your focus
+
+Log unsolved attempts too: "where I got stuck" on a challenge you failed is the entry you
+learn most from, so `/log` requires it for unsolved challenges. A `/log` that sits idle for 30
+minutes is cancelled, and you are told. Nothing is saved until the last answer.
+
+`/stats` follows a simple rule you can check by hand:
+
+* Your **focus** is the first category in your order that has fewer than `target_solves`
+  solved challenges (default 10). Unsolved attempts don't count towards it.
+* You are **jumping around** when, over the last 7 days and at least 3 logs, more than half
+  of your logs are in categories two or more places past your focus.
+
+The order and target live in `categories.toml` (see
+[`categories.example.toml`](categories.example.toml)). Category names match ignoring case.
+Renaming a category later keeps old writeups under the old name; `/stats` lists them
+separately.
+
+The inactivity nudge is sent once per quiet period; logging a writeup starts a new one. On a
+fresh install the first quiet period starts when the bot first runs. Each CTF gets one
+reminder. Both are remembered in the database, so restarting the bot never repeats one.
+
 <p align="right">(<a href="#readme-top">back to top</a>)</p>
 
 <!-- CONFIGURATION -->
@@ -220,24 +298,32 @@ take precedence over `.env`.
 | `DIGEST_DAY` | no | `mon` | `mon` `tue` `wed` `thu` `fri` `sat` `sun` |
 | `DIGEST_TIME` | no | `08:00` | 24-hour `HH:MM` in `TIMEZONE` |
 | `EVENTS_FILE` | no | `events.toml` | Manual events file, relative to the working directory |
+| `DATABASE_PATH` | no | `data/ctfbot.db` | SQLite file for writeups; created with permissions 600 |
+| `CATEGORIES_FILE` | no | `categories.toml` | Category order for `/log` and `/stats` |
+| `INACTIVITY_DAYS` | no | `3` | Nudge after this many days without a writeup (0-30, `0` = off) |
+| `NUDGE_TIME` | no | `18:00` | 24-hour `HH:MM` in `TIMEZONE` when the daily nudge check runs |
+| `REMINDER_HOURS` | no | `24` | Remind this many hours before a CTF starts (0-168, `0` = off) |
 
 If anything required is missing or malformed, the bot refuses to start and names the variable
-without printing its value.
+without printing its value. The same goes for an invalid `events.toml` or `categories.toml`
+(exit code 2).
 
 <p align="right">(<a href="#readme-top">back to top</a>)</p>
 
 <!-- SECURITY -->
 ## Security notes
 
-The bot holds one secret (the bot token), accepts input from the internet (Telegram messages)
-and displays data it does not control (CTFtime). This is what is protected and how.
+The bot holds one secret (the bot token), stores private notes (your writeups), accepts input
+from the internet (Telegram messages and button presses) and displays data it does not
+control (CTFtime). This is what is protected and how.
 
 ### The bot token
 
 * **Environment only.** `config.py` is the only module that reads `os.environ`; everything
   else receives a frozen `Config` object. `.env` is loaded with `override=False`, so on a
   server systemd's `EnvironmentFile` wins.
-* **Never committed.** `.gitignore` covers `.env`, `events.toml` and `*.db`. A pre-commit hook
+* **Never committed.** `.gitignore` covers `.env`, `events.toml`, `categories.toml`, `data/`,
+  `*.db` and `*.db-*`. A pre-commit hook
   runs [gitleaks](https://github.com/gitleaks/gitleaks) to block commits containing secrets.
   `.env.example` contains only placeholders.
 * **Never logged or printed.**
@@ -254,13 +340,20 @@ and displays data it does not control (CTFtime). This is what is protected and h
 
 ### Who can use the bot
 
-* **Owner lock, two layers.** Every command handler uses
-  `filters.User(user_id=OWNER_ID) & filters.ChatType.PRIVATE`, and a gatekeeper handler runs
-  before all others and stops anything else. A test checks that every command is locked.
+* **Owner lock, two layers.** Every command and message handler uses
+  `filters.User(user_id=OWNER_ID) & filters.ChatType.PRIVATE`. Button presses use
+  `OwnerCallbackQueryHandler`, which applies the same check (PTB's `CallbackQueryHandler`
+  has no `filters` argument). A gatekeeper handler runs before all others and stops anything
+  else, button presses included. A test walks every registered handler, including those
+  inside the `/log` conversation, and fails if one is unlocked or of a type it doesn't check.
 * **Silent rejection.** Strangers get no reply, so the bot does not confirm it exists. Only
   their numeric user ID is logged, never their message text.
-* **Reduced surface.** The bot requests only `message` updates, cannot be added to groups, and
-  always sends the digest to `OWNER_ID`.
+* **Reduced surface.** The bot requests only `message` and `callback_query` updates, cannot be
+  added to groups, and always sends the digest, reminders and nudges to `OWNER_ID`.
+* **Button data is untrusted.** A modified Telegram client can send any callback data, so
+  every pattern is anchored at both ends (`\Z`, because PTB uses `re.match`) and every value
+  (category index, writeup ID) is checked again before use. Unknown or stale buttons are
+  answered so the client stops spinning, and do nothing else.
 * **`--whoami` never replies** in the chat and ignores messages queued before it started.
 
 ### Untrusted data
@@ -274,7 +367,32 @@ and displays data it does not control (CTFtime). This is what is protected and h
 * **Clean text.** Terminal escape sequences, bidi overrides and zero-width characters are
   removed from titles.
 * **Size limits.** Messages are split below Telegram's 4096-character limit, only between
-  events, so HTML tags are never cut in half.
+  blocks, so HTML tags are never cut in half. Escaping can make text up to 6 times longer, so
+  long writeup paragraphs are cut into pieces that always fit; a test checks the worst case.
+
+### Your writeups
+
+* **Private file.** The database file is created with permissions 600 (inside a 700 folder)
+  before SQLite writes its first byte. If it is ever found readable by others, it is reset to
+  600 at startup with a warning (Linux/macOS).
+* **No flags.** There is no flag field, and flag-shaped text such as `picoCTF{...}` or
+  `flag{...}` is replaced with `[flag removed]` before saving; the bot tells you how many it
+  removed. A leaked or shared database then never publishes a flag. The pattern needs a
+  prefix of 2+ letters glued to the braces, so code like `f"{x}"` or JSON is kept; it can
+  over-redact things like LaTeX `\textbf{bold}`.
+* **SQL injection.** Every query uses `?` placeholders; user text never becomes part of an
+  SQL string. Schema migrations are fixed strings in the code.
+* **Real deletion.** `PRAGMA secure_delete` overwrites deleted writeups inside the file
+  instead of leaving them in free pages (a test checks the bytes). Deleted IDs are never
+  reused.
+* **Clean input.** Control, zero-width and bidi-override characters are stripped; line breaks
+  in notes are kept. Names are limited to 100 characters and notes to 1500. Longer input is
+  rejected, not cut, and error messages never repeat what you sent.
+* **Never logged.** Writeup text never goes to the log, not even on a database error.
+* **Memory-only drafts.** A `/log` in progress lives in memory, not in a pickle file, because
+  loading a tampered pickle runs code.
+* **Safe upgrades.** The schema version is stored in the file. Each upgrade runs in a single
+  transaction, and a database from a newer bot version is refused instead of damaged.
 
 ### Network behaviour
 
@@ -290,6 +408,14 @@ and displays data it does not control (CTFtime). This is what is protected and h
 * If your Telegram account is compromised, so is access to the bot (which only reads public
   CTF data).
 * Dependencies are pinned to exact versions but not hash-locked.
+* **The database is not encrypted at rest.** File permissions keep other users out, but not
+  root, an administrator, backups, or someone who copies your disk. Treat `data/ctfbot.db`
+  like any personal file.
+* On Windows, file modes don't apply; who can read the database depends on the folder's
+  permissions (keep the repo inside your user profile).
+* `secure_delete` cleans the database file, not copies of it: backups, and blocks the
+  filesystem or an SSD has already moved elsewhere, may still hold deleted text.
+* Restarting the bot loses a `/log` that wasn't finished.
 
 <p align="right">(<a href="#readme-top">back to top</a>)</p>
 
@@ -312,8 +438,14 @@ src/ctfbot/
   manual_events.py  events.toml loading and validation
   sources.py        merge, de-duplicate, sort, lookahead window
   formatting.py     pure functions producing Telegram HTML
-  handlers.py       owner lock and command handlers
+  handlers.py       owner lock (commands and buttons) and event commands
   digest.py         weekly digest scheduling
+  storage.py        SQLite: schema migrations, writeups, scheduler state
+  writeups.py       writeup dataclasses, input cleaning, flag redaction
+  writeup_handlers.py  /log conversation, /recent, /show, /delete, /stats
+  categories.py     category order loading and validation
+  progress.py       /stats rules (pure functions)
+  reminders.py      inactivity nudge and CTF reminders
   whoami.py         --whoami helper
   logging_setup.py  logging with token redaction
 ```
@@ -325,9 +457,11 @@ src/ctfbot/
 
 - [x] CTF event alerts from CTFtime and a manual events file
 - [x] Weekly digest
-- [ ] Writeup logging (SQLite)
-- [ ] Weakness report by category
-- [ ] Inactivity nudges
+- [x] Writeup logging (SQLite)
+- [x] Weakness report by category
+- [x] Inactivity nudges
+- [x] Reminders before each CTF
+- [ ] Export writeups to Markdown for a GitHub repo (manual, only after an event ends)
 
 See the [open issues](https://github.com/Antech-greyhat/ctf-prep-bot/issues) for proposed
 features and known issues.
@@ -347,7 +481,8 @@ open an issue with the `enhancement` label.
 5. Push to the branch (`git push origin feat/amazing-feature`)
 6. Open a pull request
 
-Never include a real bot token, `.env` or `events.toml` in a commit.
+Never include a real bot token, `.env`, `events.toml`, `categories.toml` or anything in
+`data/` in a commit.
 
 <p align="right">(<a href="#readme-top">back to top</a>)</p>
 

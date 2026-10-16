@@ -17,6 +17,11 @@ def test_valid_config_uses_defaults() -> None:
     assert config.digest_day == "mon"
     assert config.digest_time == time(8, 0)
     assert config.events_file == Path("events.toml")
+    assert config.database_path == Path("data/ctfbot.db")
+    assert config.categories_file == Path("categories.toml")
+    assert config.inactivity_days == 3
+    assert config.nudge_time == time(18, 0)
+    assert config.reminder_hours == 24
 
 
 def test_empty_optional_values_fall_back_to_defaults() -> None:
@@ -63,11 +68,21 @@ def test_bad_owner_id_fails_without_echoing_it(owner_id: str) -> None:
         ("DIGEST_DAY", "monday"),
         ("DIGEST_TIME", "24:00"),
         ("DIGEST_TIME", "8am"),
+        ("INACTIVITY_DAYS", "31"),
+        ("INACTIVITY_DAYS", "-1"),
+        ("NUDGE_TIME", "7pm"),
+        ("REMINDER_HOURS", "169"),
+        ("REMINDER_HOURS", "1.5"),
     ],
 )
 def test_bad_optional_values_fail_naming_the_variable(name: str, value: str) -> None:
     with pytest.raises(ConfigError, match=name):
         load_config(env(**{name: value}))
+
+
+def test_zero_turns_nudge_and_reminders_off() -> None:
+    config = load_config(env(INACTIVITY_DAYS="0", REMINDER_HOURS="0"))
+    assert (config.inactivity_days, config.reminder_hours) == (0, 0)
 
 
 def test_digest_day_is_case_insensitive() -> None:
