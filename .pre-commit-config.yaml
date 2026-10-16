@@ -1,6 +1,6 @@
-# Install once per clone: pre-commit install
+
 repos:
-  # Blocks commits that contain secrets such as a Telegram bot token.
+
   - repo: https://github.com/gitleaks/gitleaks
     rev: v8.30.1
     hooks:
