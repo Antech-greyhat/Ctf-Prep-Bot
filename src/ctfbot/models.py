@@ -55,6 +55,6 @@ def parse_utc(value: str) -> datetime:
     return parsed.astimezone(UTC)
 
 
-def starting_within(events: list[Event], now: datetime, days: int) -> list[Event]:
+def starting_within(events: list[Event], now: datetime, days: float) -> list[Event]:
     end = now + timedelta(days=days)
     return [event for event in events if now <= event.start <= end]

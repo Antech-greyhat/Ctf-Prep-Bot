@@ -35,7 +35,8 @@ class EventService:
         self._manual_events = manual_events
         self._lookahead_days = lookahead_days
 
-    async def upcoming(self, now: datetime) -> Upcoming:
+    async def upcoming(self, now: datetime, days: float | None = None) -> Upcoming:
+        # `days` overrides the configured lookahead, e.g. for the reminder window.
         try:
             ctftime_events = await self._ctftime.upcoming()
             ctftime_ok = True
@@ -43,4 +44,5 @@ class EventService:
             logger.warning("CTFtime unavailable: %s", exc)
             ctftime_events, ctftime_ok = [], False
         merged = merge_events(self._manual_events, ctftime_events)
-        return Upcoming(tuple(starting_within(merged, now, self._lookahead_days)), ctftime_ok)
+        window = self._lookahead_days if days is None else days
+        return Upcoming(tuple(starting_within(merged, now, window)), ctftime_ok)

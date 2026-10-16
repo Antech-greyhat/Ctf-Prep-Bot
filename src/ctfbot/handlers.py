@@ -1,4 +1,6 @@
 import logging
+import re
+from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime
 
 from telegram import Bot, Update
@@ -6,6 +8,7 @@ from telegram.constants import ChatType
 from telegram.ext import (
     Application,
     ApplicationHandlerStop,
+    CallbackQueryHandler,
     CommandHandler,
     ContextTypes,
     TypeHandler,
@@ -31,6 +34,26 @@ def is_authorized(update: Update, owner_id: int) -> bool:
         and chat is not None
         and chat.type == ChatType.PRIVATE
     )
+
+
+class OwnerCallbackQueryHandler(CallbackQueryHandler):
+    # CallbackQueryHandler has no `filters` argument, so the owner check is built in here.
+    # This keeps button presses behind the same two layers as commands.
+    __slots__ = ("owner_id",)
+
+    def __init__(
+        self,
+        callback: Callable[[Update, ContextTypes.DEFAULT_TYPE], Awaitable[object]],
+        owner_id: int,
+        pattern: re.Pattern[str] | None,
+    ) -> None:
+        super().__init__(callback, pattern=pattern)
+        self.owner_id = owner_id
+
+    def check_update(self, update: object) -> bool | object | None:
+        if not (isinstance(update, Update) and is_authorized(update, self.owner_id)):
+            return None
+        return super().check_update(update)
 
 
 async def reject_unauthorized(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:

@@ -3,7 +3,10 @@
 .env.*
 !.env.example
 events.toml
+categories.toml
+data/
 *.db
+*.db-*
 *.log
 
 # Python

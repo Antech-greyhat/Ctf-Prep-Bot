@@ -12,10 +12,12 @@ from dotenv import load_dotenv
 _TOKEN_PATTERN = re.compile(r"[0-9]+:[A-Za-z0-9_-]{30,}")
 # Not str.isdigit(): it also accepts characters like "²".
 _DIGITS = re.compile(r"[0-9]+")
-_DIGEST_TIME = re.compile(r"([01][0-9]|2[0-3]):([0-5][0-9])")
+_CLOCK_TIME = re.compile(r"([01][0-9]|2[0-3]):([0-5][0-9])")
 
 DIGEST_DAYS = ("mon", "tue", "wed", "thu", "fri", "sat", "sun")
 MAX_LOOKAHEAD_DAYS = 365
+MAX_INACTIVITY_DAYS = 30
+MAX_REMINDER_HOURS = 168
 
 DEFAULTS = {
     "TIMEZONE": "Africa/Nairobi",
@@ -23,6 +25,11 @@ DEFAULTS = {
     "DIGEST_DAY": "mon",
     "DIGEST_TIME": "08:00",
     "EVENTS_FILE": "events.toml",
+    "DATABASE_PATH": "data/ctfbot.db",
+    "CATEGORIES_FILE": "categories.toml",
+    "INACTIVITY_DAYS": "3",
+    "NUDGE_TIME": "18:00",
+    "REMINDER_HOURS": "24",
 }
 
 
@@ -40,6 +47,12 @@ class Config:
     digest_day: str
     digest_time: time
     events_file: Path
+    database_path: Path
+    categories_file: Path
+    # 0 turns the feature off.
+    inactivity_days: int
+    nudge_time: time
+    reminder_hours: int
 
 
 def read_environment() -> Mapping[str, str]:
@@ -64,10 +77,15 @@ def load_config(env: Mapping[str, str]) -> Config:
         token=load_token(env),
         owner_id=_owner_id(env),
         timezone=_timezone(_get(env, "TIMEZONE")),
-        lookahead_days=_lookahead_days(_get(env, "LOOKAHEAD_DAYS")),
+        lookahead_days=_whole_number(env, "LOOKAHEAD_DAYS", 1, MAX_LOOKAHEAD_DAYS),
         digest_day=_digest_day(_get(env, "DIGEST_DAY")),
-        digest_time=_digest_time(_get(env, "DIGEST_TIME")),
+        digest_time=_clock_time(env, "DIGEST_TIME"),
         events_file=Path(_get(env, "EVENTS_FILE")),
+        database_path=Path(_get(env, "DATABASE_PATH")),
+        categories_file=Path(_get(env, "CATEGORIES_FILE")),
+        inactivity_days=_whole_number(env, "INACTIVITY_DAYS", 0, MAX_INACTIVITY_DAYS),
+        nudge_time=_clock_time(env, "NUDGE_TIME"),
+        reminder_hours=_whole_number(env, "REMINDER_HOURS", 0, MAX_REMINDER_HOURS),
     )
 
 
@@ -93,9 +111,10 @@ def _timezone(raw: str) -> ZoneInfo:
         ) from None
 
 
-def _lookahead_days(raw: str) -> int:
-    if not _DIGITS.fullmatch(raw) or not 1 <= int(raw) <= MAX_LOOKAHEAD_DAYS:
-        raise ConfigError(f"LOOKAHEAD_DAYS must be a whole number from 1 to {MAX_LOOKAHEAD_DAYS}.")
+def _whole_number(env: Mapping[str, str], name: str, low: int, high: int) -> int:
+    raw = _get(env, name)
+    if not _DIGITS.fullmatch(raw) or not low <= int(raw) <= high:
+        raise ConfigError(f"{name} must be a whole number from {low} to {high}.")
     return int(raw)
 
 
@@ -106,8 +125,8 @@ def _digest_day(raw: str) -> str:
     return day
 
 
-def _digest_time(raw: str) -> time:
-    match = _DIGEST_TIME.fullmatch(raw)
+def _clock_time(env: Mapping[str, str], name: str) -> time:
+    match = _CLOCK_TIME.fullmatch(_get(env, name))
     if not match:
-        raise ConfigError("DIGEST_TIME must be a 24-hour time in HH:MM format (e.g. 08:00).")
+        raise ConfigError(f"{name} must be a 24-hour time in HH:MM format (e.g. 08:00).")
     return time(int(match[1]), int(match[2]))

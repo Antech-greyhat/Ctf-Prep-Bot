@@ -1,0 +1,27 @@
+# Your fundamentals-first category order for /log and /stats.
+#
+#   cp categories.example.toml categories.toml      (categories.toml is git-ignored)
+#
+# If categories.toml does not exist, the bot uses exactly this default.
+#
+# order          2 to 12 names, most fundamental first. Each name is a /log button, so keep
+#                it short (max 24 characters).
+# target_solves  solved challenges per category before /stats moves your focus to the next
+#                one (1 to 1000).
+#
+# Renaming a category later does not change old writeups: they keep the old name and /stats
+# lists them separately. Changing only upper/lower case is safe.
+#
+# Restart the bot after editing.
+
+target_solves = 10
+
+order = [
+    "General",     # Linux, scripting, encodings: the tools every other category uses
+    "Web",
+    "Forensics",
+    "Crypto",
+    "OSINT",
+    "Reversing",
+    "Pwn",
+]
