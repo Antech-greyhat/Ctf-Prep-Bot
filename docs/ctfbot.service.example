@@ -6,6 +6,7 @@
 #   sudo python3 -m venv .venv && sudo .venv/bin/pip install .
 #   sudo cp .env.example .env            # then edit it
 #   sudo cp events.example.toml events.toml   # then edit it
+#   sudo cp categories.example.toml categories.toml   # optional: your own category order
 #   sudo chown -R root:ctfbot /opt/ctf-prep-bot
 #   sudo chown ctfbot:ctfbot .env && sudo chmod 600 .env
 #   sudo install -d -o ctfbot -g ctfbot -m 700 data   # the only folder the bot may write to

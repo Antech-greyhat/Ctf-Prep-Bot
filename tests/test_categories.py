@@ -12,6 +12,7 @@ from ctfbot.categories import (
     load_categories,
     parse_categories,
 )
+from ctfbot.writeup_handlers import CATEGORY_DATA, category_keyboard
 from tests.helpers import env
 
 EXAMPLE = Path(__file__).parent.parent / "categories.example.toml"
@@ -96,3 +97,12 @@ def test_bad_categories_file_exits_2_before_creating_the_database(
     assert entry.main([]) == 2
     assert "Categories file error" in capsys.readouterr().err
     assert not database.exists()
+
+
+def test_every_allowed_category_fits_the_button_pattern() -> None:
+    # The /log buttons carry the category's index; raising MAX_CATEGORIES past what the
+    # anchored pattern accepts would make the last buttons look like tampered data.
+    largest = Categories(order=tuple(f"c{n}" for n in range(MAX_CATEGORIES)))
+    buttons = [button for row in category_keyboard(largest).inline_keyboard for button in row]
+    assert len(buttons) == MAX_CATEGORIES
+    assert all(CATEGORY_DATA.match(str(button.callback_data)) for button in buttons)

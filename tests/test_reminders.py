@@ -4,14 +4,16 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
+from telegram.error import BadRequest
 from telegram.ext import ApplicationBuilder, Job
 
 from ctfbot.categories import Categories
-from ctfbot.config import Config, load_config
+from ctfbot.config import MAX_REMINDER_HOURS, Config, load_config
 from ctfbot.formatting import help_text
 from ctfbot.models import Event
 from ctfbot.reminders import (
     NUDGED_FOR_KEY,
+    REMINDER_RETENTION,
     TRACKING_SINCE_KEY,
     ReminderJobs,
     events_to_remind,
@@ -198,6 +200,36 @@ async def test_failed_reminder_is_not_marked_sent(db: Database) -> None:
     with pytest.raises(ConnectionError):
         await jobs.reminder_job(SimpleNamespace(bot=BrokenBot()))
     assert not db.reminder_sent(reminder_key(soon))
+
+
+class PickyBot(FakeBot):
+    # Telegram refuses one particular message every time; the rest go through.
+    async def send_message(self, chat_id: int, text: str) -> None:
+        if "Refused CTF" in text:
+            raise BadRequest("can't parse entities")
+        await super().send_message(chat_id, text)
+
+
+async def test_one_refused_reminder_does_not_block_the_others(
+    db: Database, caplog: pytest.LogCaptureFixture
+) -> None:
+    refused = make_event("Refused CTF", START + 2 * HOUR)
+    later = make_event("Later CTF", START + 5 * HOUR)
+    db.mark_reminder_sent("ancient", START - 31 * DAY)
+    bot = PickyBot()
+    await make_jobs(db, Clock(START), [refused, later]).reminder_job(SimpleNamespace(bot=bot))
+    assert [text for _, text in bot.sent if "Later CTF" in text]
+    assert db.reminder_sent(reminder_key(later))
+    assert not db.reminder_sent(reminder_key(refused))
+    assert not db.reminder_sent("ancient")
+    assert "BadRequest" in caplog.text
+    assert "Refused CTF" not in caplog.text
+
+
+def test_pruned_records_can_never_match_an_event_still_ahead() -> None:
+    # A reminder is sent at most MAX_REMINDER_HOURS before the start, so once its record is
+    # older than the retention period the event has long started and can't be reminded again.
+    assert timedelta(hours=MAX_REMINDER_HOURS) < REMINDER_RETENTION
 
 
 async def test_old_reminder_records_are_pruned(db: Database) -> None:

@@ -1,3 +1,4 @@
+import hashlib
 import os
 import sqlite3
 import stat
@@ -8,6 +9,7 @@ from pathlib import Path
 
 import pytest
 
+from ctfbot import __main__ as entry
 from ctfbot import storage
 from ctfbot.storage import (
     MIGRATIONS,
@@ -18,6 +20,7 @@ from ctfbot.storage import (
     to_db_time,
 )
 from ctfbot.writeups import WriteupDraft
+from tests.helpers import env
 
 NOW = datetime(2026, 10, 16, 12, 0, tzinfo=UTC)
 posix_only = pytest.mark.skipif(os.name != "posix", reason="POSIX permissions")
@@ -135,6 +138,18 @@ def test_each_migration_is_one_transaction_that_sets_its_own_version() -> None:
         assert lines[-1] == "COMMIT;"
 
 
+# A database already upgraded past a migration never runs it again, so editing a released
+# one would silently give old and new installs different schemas. Add a new entry instead,
+# and add its hash here once it is released.
+RELEASED_MIGRATIONS = ("57f700ecb0e3f5ef29c01db5e12e422cf04549d992e0f4b500bde7f2fc9c7f29",)
+
+
+def test_released_migrations_are_never_edited() -> None:
+    assert len(MIGRATIONS) >= len(RELEASED_MIGRATIONS)
+    for script, expected in zip(MIGRATIONS, RELEASED_MIGRATIONS, strict=False):
+        assert hashlib.sha256(script.encode()).hexdigest() == expected
+
+
 def test_failed_migration_keeps_the_previous_version(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -157,6 +172,24 @@ def test_database_from_newer_version_is_refused(tmp_path: Path) -> None:
         conn.execute("PRAGMA user_version = 99")
     with pytest.raises(StorageError, match="newer"):
         open_database(path)
+
+
+def test_newer_database_makes_the_bot_exit_2(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    path = tmp_path / "bot.db"
+    with closing(sqlite3.connect(path)) as conn:
+        conn.execute("PRAGMA user_version = 99")
+    settings = env(
+        EVENTS_FILE=str(tmp_path / "none.toml"),
+        CATEGORIES_FILE=str(tmp_path / "none.toml"),
+        DATABASE_PATH=str(path),
+    )
+    monkeypatch.setattr(entry, "read_environment", lambda: settings)
+    monkeypatch.setattr(entry, "configure_logging", lambda secret: None)
+    assert entry.main([]) == 2
+    assert "Database error" in capsys.readouterr().err
+    assert user_version(path) == 99
 
 
 def test_non_database_file_is_refused(tmp_path: Path) -> None:
