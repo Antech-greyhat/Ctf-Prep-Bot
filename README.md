@@ -204,7 +204,7 @@ outbound HTTPS.
 | `/delete <id>` | Deletes one writeup, after asking you to confirm |
 | `/stats` | Progress per category, your focus, and a warning if you jump ahead |
 | `/cancel` | Stops the current `/log` (nothing is saved) |
-| `/skip` | During `/log`: skip "where did you get stuck" for a solved challenge |
+| `/skip` | During `/log`: skip "where did you get stuck" for a solved challenge (anywhere else the bot says so and the current question stands) |
 
 Example `/events` reply:
 
@@ -279,7 +279,8 @@ separately.
 
 The inactivity nudge is sent once per quiet period; logging a writeup starts a new one. On a
 fresh install the first quiet period starts when the bot first runs. Each CTF gets one
-reminder. Both are remembered in the database, so restarting the bot never repeats one.
+reminder. Both are remembered in the database, so restarting the bot never repeats one. A
+reminder Telegram refuses is retried the next hour without holding up the others.
 
 <p align="right">(<a href="#readme-top">back to top</a>)</p>
 
@@ -392,7 +393,8 @@ control (CTFtime). This is what is protected and how.
 * **Memory-only drafts.** A `/log` in progress lives in memory, not in a pickle file, because
   loading a tampered pickle runs code.
 * **Safe upgrades.** The schema version is stored in the file. Each upgrade runs in a single
-  transaction, and a database from a newer bot version is refused instead of damaged.
+  transaction, and a database from a newer bot version is refused instead of damaged. A test
+  pins each released migration's hash, so one can't be edited after release by mistake.
 
 ### Network behaviour
 
@@ -413,8 +415,10 @@ control (CTFtime). This is what is protected and how.
   like any personal file.
 * On Windows, file modes don't apply; who can read the database depends on the folder's
   permissions (keep the repo inside your user profile).
-* `secure_delete` cleans the database file, not copies of it: backups, and blocks the
-  filesystem or an SSD has already moved elsewhere, may still hold deleted text.
+* `secure_delete` cleans the database file, not copies of it: backups, SQLite's short-lived
+  rollback journal (deleted after each write, but its blocks are not wiped), swap, and blocks
+  the filesystem or an SSD has already moved elsewhere may still hold deleted text. Full-disk
+  encryption is the answer to that.
 * Restarting the bot loses a `/log` that wasn't finished.
 
 <p align="right">(<a href="#readme-top">back to top</a>)</p>

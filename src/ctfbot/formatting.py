@@ -111,6 +111,7 @@ LOG_SAVE_FAILED = (
     "kept: send your last answer again, or /cancel."
 )
 NOTHING_TO_CANCEL = "Nothing to cancel."
+NOTHING_TO_SKIP = "/skip only works for the last /log question, after a solved challenge."
 BUTTON_EXPIRED = "This button has expired."
 
 # split_message only splits between blank-line-separated blocks. Escaping can make text up to

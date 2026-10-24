@@ -7,6 +7,7 @@ import logging
 from collections.abc import Callable, Iterable
 from datetime import UTC, datetime, timedelta
 
+from telegram.error import TelegramError
 from telegram.ext import ContextTypes, Job, JobQueue
 
 from ctfbot import formatting
@@ -111,7 +112,15 @@ class ReminderJobs:
         upcoming = await self._service.upcoming(now, days=hours / 24)
         for event in events_to_remind(upcoming.events, now, hours, self._db.reminder_sent):
             text = formatting.render_reminder(event, self._config.timezone, now)
-            await context.bot.send_message(self._config.owner_id, text)
+            try:
+                await context.bot.send_message(self._config.owner_id, text)
+            except TelegramError as exc:
+                # One event Telegram keeps refusing must not block the others (or the prune)
+                # every hour. Only the error type is logged: the event title is untrusted.
+                logger.warning(
+                    "Could not send a CTF reminder (%s); retrying next hour", type(exc).__name__
+                )
+                continue
             # Recorded only after a successful send; a failure is retried next hour.
             self._db.mark_reminder_sent(reminder_key(event), now)
         self._db.prune_reminders(now - REMINDER_RETENTION)

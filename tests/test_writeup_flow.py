@@ -113,6 +113,19 @@ async def test_overlong_notes_are_rejected_without_echo(tmp_path: Path) -> None:
         assert bot.telegram.last_text() == formatting.log_ask_stuck(True)
 
 
+async def test_skip_at_another_step_is_answered_and_the_question_stands(tmp_path: Path) -> None:
+    async with running_bot(tmp_path) as bot:
+        chat = bot.chat()
+        await chat.send("/skip")
+        assert bot.telegram.last_text() == formatting.NOTHING_TO_SKIP
+        await chat.send("/log")
+        await chat.send("/skip")
+        assert bot.telegram.last_text() == formatting.NOTHING_TO_SKIP
+        await chat.send("picoCTF")
+        assert bot.telegram.last_text() == formatting.LOG_ASK_CHALLENGE
+        assert bot.app.user_data[OWNER][DRAFT_KEY].platform == "picoCTF"
+
+
 async def test_typing_instead_of_tapping_a_button(tmp_path: Path) -> None:
     async with running_bot(tmp_path) as bot:
         chat = bot.chat()

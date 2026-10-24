@@ -225,6 +225,11 @@ class WriteupHandlers:
     async def nothing_to_cancel(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         await update.effective_message.reply_text(formatting.NOTHING_TO_CANCEL)
 
+    async def nothing_to_skip(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        # Reached when /skip arrives outside the STUCK step: the conversation finds no handler
+        # for it, so the update falls through to here and the current question still stands.
+        await update.effective_message.reply_text(formatting.NOTHING_TO_SKIP)
+
     async def _read_name(self, update: Update, label: str) -> str | None:
         try:
             return clean_name(update.effective_message.text or "", label)
@@ -379,6 +384,7 @@ class WriteupHandlers:
         return [
             conversation,
             CommandHandler("cancel", self.nothing_to_cancel, filters=owner),
+            CommandHandler("skip", self.nothing_to_skip, filters=owner),
             CommandHandler("recent", self.recent, filters=owner),
             CommandHandler("show", self.show, filters=owner),
             CommandHandler("delete", self.delete, filters=owner),
