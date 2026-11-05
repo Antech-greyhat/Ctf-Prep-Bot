@@ -12,6 +12,7 @@ from typing import Any
 
 import httpx
 from telegram import Update
+from telegram.error import NetworkError
 from telegram.ext import Application, ConversationHandler
 from telegram.request import BaseRequest, RequestData
 
@@ -31,6 +32,8 @@ BOT_ID = 777
 class Call:
     method: str
     params: dict[str, Any]
+    # Uploaded files as field name -> (file name, bytes, content type).
+    files: dict[str, Any] = field(default_factory=dict)
 
     @property
     def text(self) -> str:
@@ -48,6 +51,8 @@ class Call:
 @dataclass
 class FakeTelegram(BaseRequest):
     calls: list[Call] = field(default_factory=list)
+    # Methods that fail with a network error, as Telegram being unreachable would.
+    failing: set[str] = field(default_factory=set)
     _message_ids: Iterator[int] = field(default_factory=lambda: itertools.count(1000))
 
     @property
@@ -72,13 +77,16 @@ class FakeTelegram(BaseRequest):
     ) -> tuple[int, bytes]:
         name = url.rsplit("/", 1)[-1]
         params = dict(request_data.parameters) if request_data else {}
-        self.calls.append(Call(name, params))
+        files = dict(request_data.multipart_data or {}) if request_data else {}
+        self.calls.append(Call(name, params, files))
+        if name in self.failing:
+            raise NetworkError("fake outage")
         return 200, json.dumps({"ok": True, "result": self._result(name, params)}).encode()
 
     def _result(self, name: str, params: dict[str, Any]) -> object:
         if name == "getMe":
             return {"id": BOT_ID, "is_bot": True, "first_name": "Test", "username": "test_bot"}
-        if name in {"sendMessage", "editMessageText", "editMessageReplyMarkup"}:
+        if name in {"sendMessage", "sendDocument", "editMessageText", "editMessageReplyMarkup"}:
             chat_id = params.get("chat_id", OWNER)
             return bot_message(next(self._message_ids), int(chat_id), params.get("text", ""))
         return True

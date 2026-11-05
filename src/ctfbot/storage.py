@@ -116,6 +116,12 @@ class Database:
         ).fetchall()
         return [_to_writeup(row) for row in rows]
 
+    def all_writeups(self) -> list[Writeup]:
+        rows = self._conn.execute(
+            f"SELECT {_WRITEUP_COLUMNS} FROM writeups ORDER BY id DESC"  # noqa: S608
+        ).fetchall()
+        return [_to_writeup(row) for row in rows]
+
     def delete_writeup(self, writeup_id: int) -> bool:
         with self._conn:
             cursor = self._conn.execute("DELETE FROM writeups WHERE id = ?", (writeup_id,))

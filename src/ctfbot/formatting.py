@@ -31,6 +31,7 @@ def help_text(config: Config) -> str:
             "/show &lt;id&gt; - read one writeup",
             "/delete &lt;id&gt; - delete one writeup",
             "/release &lt;id&gt; - end a live-CTF hold early",
+            "/export - download your writeups as Markdown",
             "/stats - progress by category and what to focus on",
             "/cancel - stop the current /log",
             "",
@@ -291,6 +292,46 @@ def still_held(writeup_id: int) -> str:
 
 def not_held(writeup_id: int) -> str:
     return f"Writeup #{writeup_id} isn't held."
+
+
+# Export ------------------------------------------------------------------------------------
+
+EXPORT_ASK = "What do you want to export?"
+EXPORT_ASK_CATEGORY = "Which category?"
+EXPORT_ALL_LABEL = "All writeups"
+EXPORT_SINCE_LABEL = "Since last export"
+EXPORT_RECENT_LABEL = "Last 30 days"
+EXPORT_CATEGORY_LABEL = "One category"
+EXPORT_WORKING = "📦 Building your export..."
+EXPORT_FAILED = "⚠️ Couldn't send the export. Nothing was marked as exported; try /export again."
+
+
+def _held_back_line(held_back: int, next_release: datetime | None, tz: ZoneInfo) -> str | None:
+    if not held_back:
+        return None
+    line = f"🔒 Held back: {held_back}."
+    return f"{line} Next hold ends {local_time(next_release, tz)}." if next_release else line
+
+
+def render_nothing_to_export(held_back: int, next_release: datetime | None, tz: ZoneInfo) -> str:
+    held = _held_back_line(held_back, next_release, tz)
+    return f"Nothing to export\n{held}" if held else "Nothing to export"
+
+
+def render_export_done(
+    exported: int,
+    redactions: int,
+    held_back: int,
+    next_release: datetime | None,
+    tz: ZoneInfo,
+) -> str:
+    lines = [f"📦 Exported {exported} writeup(s)."]
+    if redactions:
+        lines.append(f"🔒 Removed {redactions} flag-like string(s) from the export.")
+    held = _held_back_line(held_back, next_release, tz)
+    if held:
+        lines.append(held)
+    return "\n".join(lines)
 
 
 # Progress report ---------------------------------------------------------------------------

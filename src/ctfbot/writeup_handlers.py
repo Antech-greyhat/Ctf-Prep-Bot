@@ -1,4 +1,4 @@
-# /log (a guided conversation), /recent, /show, /delete, /release and /stats.
+# /log (a guided conversation), /recent, /show, /delete, /release, /export and /stats.
 import contextlib
 import html
 import logging
@@ -9,8 +9,8 @@ from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 
-from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
-from telegram.error import BadRequest
+from telegram import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Update
+from telegram.error import BadRequest, TelegramError
 from telegram.ext import (
     BaseHandler,
     CommandHandler,
@@ -25,11 +25,21 @@ from telegram.warnings import PTBUserWarning
 from ctfbot import formatting
 from ctfbot.categories import Categories
 from ctfbot.config import Config
+from ctfbot.export import (
+    Keep,
+    archive_name,
+    build_archive,
+    created_since,
+    everything,
+    in_category,
+    new_since,
+    plan_export,
+)
 from ctfbot.handlers import OwnerCallbackQueryHandler, owner_only, send_chunks
 from ctfbot.models import Event
 from ctfbot.progress import RECENT_WINDOW, Report, build_report
 from ctfbot.sources import EventService
-from ctfbot.storage import Database
+from ctfbot.storage import Database, from_db_time, to_db_time
 from ctfbot.writeups import (
     InvalidInput,
     WriteupDraft,
@@ -49,6 +59,8 @@ MAX_EVENT_BUTTONS = 8
 # Telegram shows long button text cut off anyway; this keeps the end predictable.
 MAX_BUTTON_TITLE = 40
 DRAFT_KEY = "writeup_draft"
+LAST_EXPORT_KEY = "last_export"
+EXPORT_RECENT_WINDOW = timedelta(days=30)
 
 # Callback data comes back from the Telegram client, and a modified client can send anything,
 # so every pattern is anchored and every value is checked again in the handler.
@@ -59,6 +71,8 @@ CATEGORY_DATA = re.compile(r"log:cat:([0-9]{1,2})\Z")
 RESULT_DATA = re.compile(r"log:(solved|unsolved)\Z")
 DELETE_DATA = re.compile(r"del:(yes|no):([0-9]{1,10})\Z")
 RELEASE_DATA = re.compile(r"rel:(yes|no):([0-9]{1,10})\Z")
+EXPORT_DATA = re.compile(r"exp:(all|since|recent|category)\Z")
+EXPORT_CATEGORY_DATA = re.compile(r"exp:cat:([0-9]{1,2})\Z")
 _ID_ARG = re.compile(r"#?([0-9]{1,10})")
 
 Callback = Callable[[Update, ContextTypes.DEFAULT_TYPE], Awaitable[object]]
@@ -100,9 +114,9 @@ def parse_writeup_id(args: Sequence[str] | None) -> int | None:
     return int(match[1]) if match and int(match[1]) > 0 else None
 
 
-def category_keyboard(categories: Categories) -> InlineKeyboardMarkup:
+def category_keyboard(categories: Categories, prefix: str = "log:cat") -> InlineKeyboardMarkup:
     buttons = [
-        InlineKeyboardButton(name, callback_data=f"log:cat:{index}")
+        InlineKeyboardButton(name, callback_data=f"{prefix}:{index}")
         for index, name in enumerate(categories.order)
     ]
     return InlineKeyboardMarkup([buttons[i : i + 2] for i in range(0, len(buttons), 2)])
@@ -136,6 +150,20 @@ def event_keyboard(events: Sequence[Event]) -> InlineKeyboardMarkup:
     ]
     rows.append([InlineKeyboardButton(formatting.NOT_LISTED_LABEL, callback_data="log:event:none")])
     return InlineKeyboardMarkup(rows)
+
+
+EXPORT_KEYBOARD = InlineKeyboardMarkup(
+    [
+        [
+            InlineKeyboardButton(formatting.EXPORT_ALL_LABEL, callback_data="exp:all"),
+            InlineKeyboardButton(formatting.EXPORT_SINCE_LABEL, callback_data="exp:since"),
+        ],
+        [
+            InlineKeyboardButton(formatting.EXPORT_RECENT_LABEL, callback_data="exp:recent"),
+            InlineKeyboardButton(formatting.EXPORT_CATEGORY_LABEL, callback_data="exp:category"),
+        ],
+    ]
+)
 
 
 def release_keyboard(writeup_id: int) -> InlineKeyboardMarkup:
@@ -482,6 +510,90 @@ class WriteupHandlers:
             self._db.release_hold(writeup_id, now)
             await query.edit_message_text(formatting.released(writeup_id))
 
+    # Export. Plain buttons like /delete, not a conversation: there is nothing to type, so
+    # there is no state to track and nothing to clash with a /log in progress.
+
+    async def export(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        await update.effective_message.reply_text(
+            formatting.EXPORT_ASK, reply_markup=EXPORT_KEYBOARD
+        )
+
+    async def export_choice(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        query = update.callback_query
+        await query.answer()
+        match = EXPORT_DATA.fullmatch(query.data or "")
+        if not match:
+            return
+        choice = match[1]
+        if choice == "category":
+            await query.edit_message_text(
+                formatting.EXPORT_ASK_CATEGORY,
+                reply_markup=category_keyboard(self._categories, "exp:cat"),
+            )
+            return
+        now = self._clock()
+        if choice == "all":
+            await self._run_export(query, context, everything, now, moves_marker=True)
+        elif choice == "since":
+            await self._run_export(query, context, new_since(self._last_export()), now, True)
+        else:
+            keep = created_since(now - EXPORT_RECENT_WINDOW)
+            await self._run_export(query, context, keep, now, moves_marker=False)
+
+    async def export_category(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        query = update.callback_query
+        await query.answer()
+        match = EXPORT_CATEGORY_DATA.fullmatch(query.data or "")
+        index = int(match[1]) if match else -1
+        if not 0 <= index < len(self._categories.order):
+            return
+        keep = in_category(self._categories.order[index])
+        await self._run_export(query, context, keep, self._clock(), moves_marker=False)
+
+    def _last_export(self) -> datetime | None:
+        stored = self._db.get_state(LAST_EXPORT_KEY)
+        return from_db_time(stored) if stored else None
+
+    async def _run_export(
+        self,
+        query: CallbackQuery,
+        context: ContextTypes.DEFAULT_TYPE,
+        keep: Keep,
+        now: datetime,
+        moves_marker: bool,
+    ) -> None:
+        # moves_marker: only exports that cover everything new may move "since last export".
+        # After a one-category export the other categories' new writeups would be skipped.
+        tz = self._config.timezone
+        owner = self._config.owner_id
+        # Removing the buttons first means a double tap can't send the file twice.
+        await query.edit_message_text(formatting.EXPORT_WORKING)
+        plan = plan_export(self._db.all_writeups(), keep, now)
+        if not plan.ready:
+            text = formatting.render_nothing_to_export(plan.held_back, plan.next_release, tz)
+            await context.bot.send_message(owner, text)
+            return
+        archive = build_archive(plan.ready, tz)
+        try:
+            # To the configured owner by ID, never to whichever chat the update claims to be from.
+            await context.bot.send_document(
+                owner, document=archive.data, filename=archive_name(now, tz)
+            )
+        except TelegramError as exc:
+            # Only the error type: the marker stays put, so a retry exports the same writeups.
+            logger.warning("Could not send the export (%s)", type(exc).__name__)
+            await context.bot.send_message(owner, formatting.EXPORT_FAILED)
+            return
+        if moves_marker:
+            # `now` from before the file was built, so a writeup logged meanwhile counts as new.
+            self._db.set_state(LAST_EXPORT_KEY, to_db_time(now))
+        await context.bot.send_message(
+            owner,
+            formatting.render_export_done(
+                len(plan.ready), archive.redactions, plan.held_back, plan.next_release, tz
+            ),
+        )
+
     # Progress.
 
     def report(self, now: datetime) -> Report:
@@ -568,9 +680,12 @@ class WriteupHandlers:
             CommandHandler("show", self.show, filters=owner),
             CommandHandler("delete", self.delete, filters=owner),
             CommandHandler("release", self.release, filters=owner),
+            CommandHandler("export", self.export, filters=owner),
             CommandHandler("stats", self.stats, filters=owner),
             button(self.delete_answer, DELETE_DATA),
             button(self.release_answer, RELEASE_DATA),
+            button(self.export_choice, EXPORT_DATA),
+            button(self.export_category, EXPORT_CATEGORY_DATA),
             # Must stay last: catches any other button.
             OwnerCallbackQueryHandler(self.expired_button, owner_id, pattern=None),
         ]
