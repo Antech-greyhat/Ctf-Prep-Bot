@@ -3,12 +3,14 @@
 import itertools
 import json
 import time
-from collections.abc import AsyncIterator, Iterator
+from collections.abc import AsyncIterator, Callable, Iterator
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
+import httpx
 from telegram import Update
 from telegram.ext import Application, ConversationHandler
 from telegram.request import BaseRequest, RequestData
@@ -16,6 +18,7 @@ from telegram.request import BaseRequest, RequestData
 from ctfbot.__main__ import build_application
 from ctfbot.categories import Categories
 from ctfbot.config import load_config
+from ctfbot.models import Event
 from ctfbot.storage import Database, open_database
 from tests.helpers import env
 
@@ -157,9 +160,24 @@ class Harness:
         )
 
 
+def offline_ctftime(status: int = 200, payload: object = ()) -> httpx.AsyncClient:
+    # Stands in for CTFtime, so /log can ask for running events without any network access.
+    # Any status other than 200 makes the client report CTFtime as unavailable; 404 does it
+    # without a retry, so a test doesn't sit through the backoff.
+    def respond(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(status, json=list(payload) if status == 200 else None)
+
+    return httpx.AsyncClient(transport=httpx.MockTransport(respond))
+
+
 @asynccontextmanager
 async def running_bot(
-    tmp_path: Path, categories: Categories | None = None, **settings: str
+    tmp_path: Path,
+    categories: Categories | None = None,
+    manual_events: list[Event] | None = None,
+    http: httpx.AsyncClient | None = None,
+    clock: Callable[[], datetime] = lambda: datetime.now(UTC),
+    **settings: str,
 ) -> AsyncIterator[Harness]:
     # Reminders and nudges are off unless a test turns them on: their scheduled jobs would
     # otherwise be live, and the reminder job talks to CTFtime.
@@ -167,7 +185,15 @@ async def running_bot(
     config = load_config(env(OWNER_ID=str(OWNER), **settings))
     telegram = FakeTelegram()
     db = open_database(tmp_path / "bot.db")
-    app = build_application(config, [], db, categories or Categories(), request=telegram)
+    app = build_application(
+        config,
+        manual_events or [],
+        db,
+        categories or Categories(),
+        request=telegram,
+        http=http or offline_ctftime(),
+        clock=clock,
+    )
     await app.initialize()
     # Starts the job queue (needed for /log's timeout) but not polling.
     await app.start()

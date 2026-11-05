@@ -1,6 +1,9 @@
 import argparse
 import sys
+from collections.abc import Callable
+from datetime import UTC, datetime
 
+import httpx
 from telegram import LinkPreviewOptions, Update
 from telegram.constants import ParseMode
 from telegram.error import InvalidToken
@@ -29,12 +32,14 @@ def build_application(
     categories: Categories,
     *,
     request: BaseRequest | None = None,
+    http: httpx.AsyncClient | None = None,
+    clock: Callable[[], datetime] = lambda: datetime.now(UTC),
 ) -> Application:
     # No link previews: Telegram must never fetch an untrusted URL for us.
     defaults = Defaults(
         parse_mode=ParseMode.HTML, link_preview_options=LinkPreviewOptions(is_disabled=True)
     )
-    http = make_http_client()
+    http = http or make_http_client()
 
     async def close_resources(_: Application) -> None:
         await http.aclose()
@@ -42,12 +47,13 @@ def build_application(
 
     builder = ApplicationBuilder().token(config.token).defaults(defaults)
     if request is not None:
-        # Tests pass an offline fake so no request ever reaches Telegram.
+        # Tests pass offline fakes (`request`, `http`), so nothing reaches the network.
         builder = builder.request(request)
     app = builder.post_shutdown(close_resources).build()
-    service = EventService(CtftimeClient(http), manual_events, config.lookahead_days)
+    ctftime = CtftimeClient(http, clock=clock)
+    service = EventService(ctftime, manual_events, config.lookahead_days)
     handlers = BotHandlers(config, service)
-    writeups = WriteupHandlers(config, db, categories)
+    writeups = WriteupHandlers(config, db, categories, service, clock)
     register_handlers(app, handlers, config.owner_id)
     app.add_handlers(writeups.handlers(config.owner_id))
     schedule_weekly_digest(app.job_queue, config, handlers)

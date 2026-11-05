@@ -17,6 +17,7 @@ from tests.test_writeups import ZERO_WIDTH_SPACE
 async def log_until_notes(chat: Chat, solved: bool = True, category: int = 1) -> None:
     await chat.send("/log")
     await chat.send("picoCTF")
+    await chat.press("log:live:no")
     await chat.send("Cookies")
     await chat.press(f"log:cat:{category}")
     await chat.press("log:solved" if solved else "log:unsolved")
@@ -26,6 +27,7 @@ async def save_one(bot: Harness, challenge: str = "Cookies") -> int:
     chat = bot.chat()
     await chat.send("/log")
     await chat.send("picoCTF")
+    await chat.press("log:live:no")
     await chat.send(challenge)
     await chat.press("log:cat:1")
     await chat.press("log:solved")
@@ -76,6 +78,7 @@ async def test_category_buttons_follow_configured_order(tmp_path: Path) -> None:
         chat = bot.chat()
         await chat.send("/log")
         await chat.send("picoCTF")
+        await chat.press("log:live:no")
         await chat.send("Cookies")
         assert bot.telegram.sent()[-1].buttons == [("Web", "log:cat:0"), ("Crypto", "log:cat:1")]
 
@@ -99,7 +102,7 @@ async def test_invalid_answer_asks_again_instead_of_moving_on(tmp_path: Path) ->
         await chat.send(ZERO_WIDTH_SPACE)
         assert "can't be empty" in bot.telegram.last_text()
         await chat.send("picoCTF")
-        assert bot.telegram.last_text() == formatting.LOG_ASK_CHALLENGE
+        assert bot.telegram.last_text() == formatting.LOG_ASK_LIVE
 
 
 async def test_overlong_notes_are_rejected_without_echo(tmp_path: Path) -> None:
@@ -122,7 +125,7 @@ async def test_skip_at_another_step_is_answered_and_the_question_stands(tmp_path
         await chat.send("/skip")
         assert bot.telegram.last_text() == formatting.NOTHING_TO_SKIP
         await chat.send("picoCTF")
-        assert bot.telegram.last_text() == formatting.LOG_ASK_CHALLENGE
+        assert bot.telegram.last_text() == formatting.LOG_ASK_LIVE
         assert bot.app.user_data[OWNER][DRAFT_KEY].platform == "picoCTF"
 
 
@@ -131,6 +134,7 @@ async def test_typing_instead_of_tapping_a_button(tmp_path: Path) -> None:
         chat = bot.chat()
         await chat.send("/log")
         await chat.send("picoCTF")
+        await chat.press("log:live:no")
         await chat.send("Cookies")
         await chat.send("Web")
         assert bot.telegram.last_text() == formatting.LOG_USE_BUTTONS
@@ -147,13 +151,16 @@ async def test_tampered_category_data_is_ignored(tmp_path: Path, data: str) -> N
         chat = bot.chat()
         await chat.send("/log")
         await chat.send("picoCTF")
+        await chat.press("log:live:no")
         await chat.send("Cookies")
+        presses_before = len(bot.telegram.sent("answerCallbackQuery"))
+        edits_before = len(bot.telegram.sent("editMessageText"))
         await chat.press(data)
         # Every press is answered, so the client's spinner always stops.
-        assert len(bot.telegram.sent("answerCallbackQuery")) == 1
+        assert len(bot.telegram.sent("answerCallbackQuery")) == presses_before + 1
         await chat.press("log:cat:2")
         edits = [call.text for call in bot.telegram.sent("editMessageText")]
-        assert edits == ["Category: <b>Forensics</b>"]
+        assert edits[edits_before:] == ["Category: <b>Forensics</b>"]
 
 
 async def test_cancel_discards_the_draft(tmp_path: Path) -> None:
@@ -176,7 +183,7 @@ async def test_log_again_starts_fresh(tmp_path: Path) -> None:
         await chat.send("/log")
         assert bot.telegram.last_text() == formatting.LOG_ASK_PLATFORM
         await chat.send("TryHackMe")
-        assert bot.telegram.last_text() == formatting.LOG_ASK_CHALLENGE
+        assert bot.telegram.last_text() == formatting.LOG_ASK_LIVE
         assert bot.app.user_data[OWNER][DRAFT_KEY].platform == "TryHackMe"
         assert bot.app.user_data[OWNER][DRAFT_KEY].category == ""
 
@@ -206,7 +213,7 @@ async def test_other_commands_still_work_mid_log(tmp_path: Path) -> None:
         await chat.send("/help")
         assert "/log" in bot.telegram.last_text()
         await chat.send("picoCTF")
-        assert bot.telegram.last_text() == formatting.LOG_ASK_CHALLENGE
+        assert bot.telegram.last_text() == formatting.LOG_ASK_LIVE
 
 
 async def test_save_failure_keeps_the_draft_and_logs_no_text(

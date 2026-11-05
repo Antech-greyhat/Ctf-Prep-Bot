@@ -1,5 +1,6 @@
 import logging
 from datetime import UTC, datetime
+from zoneinfo import ZoneInfo
 
 import pytest
 
@@ -13,6 +14,7 @@ from ctfbot.writeups import (
     clean_notes,
     hold_end,
     is_held,
+    parse_hold_end,
     redact_flags,
 )
 
@@ -157,3 +159,31 @@ def test_hold_end_is_none_when_unreadable_or_absent() -> None:
     assert hold_end(held_writeup(None)) is None
     assert hold_end(held_writeup("garbage")) is None
     assert hold_end(held_writeup("2026-10-24T12:00:00+00:00")) == HOLD_NOW
+
+
+NEW_YORK = ZoneInfo("America/New_York")
+BEFORE_DST_CHANGES = datetime(2026, 2, 1, tzinfo=UTC)
+
+
+def test_time_repeated_when_clocks_go_back_uses_the_later_one() -> None:
+    end = parse_hold_end("2026-11-01 01:30", datetime(2026, 10, 25, tzinfo=UTC), NEW_YORK)
+    assert end == datetime(2026, 11, 1, 6, 30, tzinfo=UTC)
+
+
+def test_time_skipped_when_clocks_go_forward_is_refused() -> None:
+    with pytest.raises(InvalidInput, match="doesn't exist"):
+        parse_hold_end("2026-03-08 02:30", datetime(2026, 3, 1, tzinfo=UTC), NEW_YORK)
+
+
+@pytest.mark.parametrize(
+    "text",
+    ["2026-2-02 10:00", "2026-02-02T10:00", "2026-02-02 10:00:00", "٢٠٢٦-02-02 10:00", ""],
+)
+def test_hold_end_needs_the_exact_format(text: str) -> None:
+    with pytest.raises(InvalidInput, match="YYYY-MM-DD HH:MM"):
+        parse_hold_end(text, BEFORE_DST_CHANGES, NEW_YORK)
+
+
+def test_hold_end_ignores_surrounding_spaces() -> None:
+    end = parse_hold_end("  2026-02-02 10:00\n", BEFORE_DST_CHANGES, NEW_YORK)
+    assert end == datetime(2026, 2, 2, 15, 0, tzinfo=UTC)

@@ -121,6 +121,16 @@ class Database:
             cursor = self._conn.execute("DELETE FROM writeups WHERE id = ?", (writeup_id,))
         return cursor.rowcount == 1
 
+    def release_hold(self, writeup_id: int, now: datetime) -> bool:
+        # Writes `now` rather than NULL. A hold that ended in the past already means "not held",
+        # and "since last export" needs the moment the writeup became exportable. With NULL an
+        # older writeup released today would look exported and be skipped for good.
+        with self._conn:
+            cursor = self._conn.execute(
+                "UPDATE writeups SET hold_until = ? WHERE id = ?", (to_db_time(now), writeup_id)
+            )
+        return cursor.rowcount == 1
+
     def solved_counts(self) -> Counter[str]:
         rows = self._conn.execute(
             "SELECT category, COUNT(*) FROM writeups WHERE solved = 1 GROUP BY category"

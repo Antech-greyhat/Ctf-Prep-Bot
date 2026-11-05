@@ -6,8 +6,8 @@ from zoneinfo import ZoneInfo
 from ctfbot.config import DIGEST_DAYS, Config
 from ctfbot.models import Event
 from ctfbot.progress import RECENT_WINDOW, CategoryProgress, Report
-from ctfbot.sources import Upcoming
-from ctfbot.writeups import Writeup, WriteupDraft
+from ctfbot.sources import Running, Upcoming
+from ctfbot.writeups import MAX_HOLD, Writeup, WriteupDraft, hold_end, is_held
 
 TELEGRAM_MESSAGE_LIMIT = 4096
 
@@ -30,6 +30,7 @@ def help_text(config: Config) -> str:
             "/recent - your latest writeups",
             "/show &lt;id&gt; - read one writeup",
             "/delete &lt;id&gt; - delete one writeup",
+            "/release &lt;id&gt; - end a live-CTF hold early",
             "/stats - progress by category and what to focus on",
             "/cancel - stop the current /log",
             "",
@@ -97,6 +98,10 @@ LOG_ASK_PLATFORM = (
     "📝 New writeup. Which platform or CTF? (e.g. picoCTF, TryHackMe, CyberGame Kenya)\n"
     "Send /cancel at any time to stop."
 )
+LOG_ASK_LIVE = "Is this from a live CTF?"
+LIVE_YES_LABEL = "Yes"
+LIVE_NO_LABEL = "No"
+NOT_LISTED_LABEL = "Not listed"
 LOG_ASK_CHALLENGE = "Challenge name?"
 LOG_ASK_CATEGORY = "Category?"
 LOG_ASK_RESULT = "Did you solve it?"
@@ -121,6 +126,32 @@ _SAFE_BLOCK = 3800
 _SAFE_PIECE = 600
 
 
+def log_ask_event(running: Running) -> str:
+    lines = []
+    if not running.ctftime_ok:
+        lines.append("⚠️ CTFtime is unavailable right now; showing manual events only.")
+    if running.events:
+        lines.append("Which CTF? The writeup stays private until it ends.")
+    else:
+        lines.append("I can't see any CTF running right now.")
+    return "\n".join(lines)
+
+
+def log_ask_hold_end(tz: ZoneInfo) -> str:
+    return (
+        f"When does it end? Send YYYY-MM-DD HH:MM in {html.escape(tz.key)}, "
+        f"at most {MAX_HOLD.days} days from now."
+    )
+
+
+def log_live_answer(live: bool) -> str:
+    return f"Live CTF: {LIVE_YES_LABEL if live else LIVE_NO_LABEL}"
+
+
+def log_event_chosen(title: str) -> str:
+    return f"Live CTF: <b>{html.escape(title)}</b>"
+
+
 def log_ask_approach(solved: bool) -> str:
     if solved:
         return (
@@ -140,41 +171,66 @@ def status(writeup: WriteupDraft) -> str:
     return "✅ solved" if writeup.solved else "❌ unsolved"
 
 
-def render_saved(writeup_id: int, writeup: WriteupDraft, redactions: int) -> str:
+def local_time(moment: datetime, tz: ZoneInfo) -> str:
+    return f"{moment.astimezone(tz):%a %d %b %Y %H:%M %Z}"
+
+
+def hold_line(writeup: Writeup, tz: ZoneInfo, now: datetime) -> str | None:
+    # None once the hold is over. Nothing announces that: it just stops being shown.
+    if not is_held(writeup, now):
+        return None
+    end = hold_end(writeup)
+    if end is None:
+        return "🔒 Private: the release time is unreadable. /release clears it."
+    return f"🔒 Private until {local_time(end, tz)}"
+
+
+def render_saved(
+    writeup_id: int,
+    writeup: WriteupDraft,
+    redactions: int,
+    private_until: datetime | None,
+    tz: ZoneInfo,
+) -> str:
     lines = [
         f"Saved writeup #{writeup_id}: <b>{html.escape(writeup.challenge)}</b> "
         f"({html.escape(writeup.category)}, {status(writeup)})."
     ]
     if redactions:
         lines.append(f"🔒 Removed {redactions} flag-like string(s) before saving.")
+    if private_until:
+        lines.append(f"🔒 Private until {local_time(private_until, tz)}")
     lines.append(f"Read it back with /show {writeup_id}.")
     return "\n".join(lines)
 
 
-def summary_block(writeup: Writeup, tz: ZoneInfo) -> str:
+def summary_block(writeup: Writeup, tz: ZoneInfo, now: datetime) -> str:
     created = writeup.created_at.astimezone(tz)
-    return (
+    block = (
         f"<b>#{writeup.id}</b> {html.escape(writeup.challenge)} · "
         f"{html.escape(writeup.platform)}\n"
         f"{html.escape(writeup.category)} · {status(writeup)} · {created:%a %d %b %Y}"
     )
+    hold = hold_line(writeup, tz, now)
+    return f"{block}\n{hold}" if hold else block
 
 
-def render_recent(writeups: list[Writeup], tz: ZoneInfo) -> str:
+def render_recent(writeups: list[Writeup], tz: ZoneInfo, now: datetime) -> str:
     if not writeups:
         return "No writeups yet. Send /log after your next challenge."
     blocks = ["<b>Recent writeups</b>"]
-    blocks.extend(summary_block(writeup, tz) for writeup in writeups)
+    blocks.extend(summary_block(writeup, tz, now) for writeup in writeups)
     blocks.append("Read one with /show &lt;id&gt;.")
     return "\n\n".join(blocks)
 
 
-def render_writeup(writeup: Writeup, tz: ZoneInfo) -> str:
+def render_writeup(writeup: Writeup, tz: ZoneInfo, now: datetime) -> str:
     created = writeup.created_at.astimezone(tz)
+    hold = hold_line(writeup, tz, now)
     blocks = [
         f"<b>#{writeup.id} · {html.escape(writeup.challenge)}</b>\n"
         f"{html.escape(writeup.platform)} · {html.escape(writeup.category)} · "
-        f"{status(writeup)}\n{created:%a %d %b %Y %H:%M %Z}",
+        f"{status(writeup)}\n{created:%a %d %b %Y %H:%M %Z}" + (f"\n{hold}" if hold else ""),
         f"<b>{'How I solved it' if writeup.solved else 'What I tried'}</b>\n"
         f"{escape_notes(writeup.approach)}",
     ]
@@ -198,8 +254,15 @@ def escape_notes(text: str) -> str:
     return "\n\n".join(pieces)
 
 
-def confirm_delete(writeup: Writeup, tz: ZoneInfo) -> str:
-    return f"Delete this writeup? This can't be undone.\n\n{summary_block(writeup, tz)}"
+def confirm_delete(writeup: Writeup, tz: ZoneInfo, now: datetime) -> str:
+    return f"Delete this writeup? This can't be undone.\n\n{summary_block(writeup, tz, now)}"
+
+
+def confirm_release(writeup: Writeup, tz: ZoneInfo, now: datetime) -> str:
+    return (
+        "Release this writeup now? Only do this if the organisers allow writeups or the time "
+        f"was wrong. /export will include it straight away.\n\n{summary_block(writeup, tz, now)}"
+    )
 
 
 def usage(command: str) -> str:
@@ -216,6 +279,18 @@ def deleted(writeup_id: int) -> str:
 
 def kept(writeup_id: int) -> str:
     return f"Kept writeup #{writeup_id}."
+
+
+def released(writeup_id: int) -> str:
+    return f"🔓 Released writeup #{writeup_id}."
+
+
+def still_held(writeup_id: int) -> str:
+    return f"🔒 Writeup #{writeup_id} stays private."
+
+
+def not_held(writeup_id: int) -> str:
+    return f"Writeup #{writeup_id} isn't held."
 
 
 # Progress report ---------------------------------------------------------------------------
