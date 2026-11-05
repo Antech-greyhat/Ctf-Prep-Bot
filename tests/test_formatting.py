@@ -16,6 +16,7 @@ from ctfbot.sources import Upcoming
 from ctfbot.writeups import MAX_NAME_LENGTH, MAX_NOTES_LENGTH, Writeup
 from tests.helpers import make_event
 
+NOW = datetime(2026, 10, 16, 12, 0, tzinfo=UTC)
 NAIROBI = ZoneInfo("Africa/Nairobi")
 BERLIN = ZoneInfo("Europe/Berlin")
 
@@ -121,14 +122,14 @@ def make_writeup(**overrides: object) -> Writeup:
 
 
 def test_writeup_shows_local_time_and_skips_empty_stuck() -> None:
-    text = render_writeup(make_writeup(), NAIROBI)
+    text = render_writeup(make_writeup(), NAIROBI, NOW)
     assert "Fri 16 Oct 2026 12:30 EAT" in text
     assert "How I solved it" in text
     assert "Where I got stuck" not in text
 
 
 def test_unsolved_writeup_headings() -> None:
-    text = render_writeup(make_writeup(solved=False, stuck="here"), NAIROBI)
+    text = render_writeup(make_writeup(solved=False, stuck="here"), NAIROBI, NOW)
     assert "What I tried" in text
     assert "Where I got stuck" in text
     assert "❌ unsolved" in text
@@ -143,7 +144,7 @@ def test_worst_case_escaping_still_fits_in_messages() -> None:
         approach='"' * MAX_NOTES_LENGTH,
         stuck="&" * MAX_NOTES_LENGTH,
     )
-    chunks = split_message(render_writeup(writeup, NAIROBI))
+    chunks = split_message(render_writeup(writeup, NAIROBI, NOW))
     assert all(telegram_length(chunk) <= 4096 for chunk in chunks)
     joined = "".join(chunks)
     assert joined.count("&quot;") == 2 * MAX_NAME_LENGTH + MAX_NOTES_LENGTH
@@ -153,11 +154,11 @@ def test_worst_case_escaping_still_fits_in_messages() -> None:
 def test_ten_worst_case_summaries_fit_in_messages() -> None:
     long = '"' * MAX_NAME_LENGTH
     writeups = [make_writeup(id=n, platform=long, challenge=long) for n in range(10)]
-    chunks = split_message(render_recent(writeups, NAIROBI))
+    chunks = split_message(render_recent(writeups, NAIROBI, NOW))
     assert all(telegram_length(chunk) <= 4096 for chunk in chunks)
 
 
 def test_recent_empty_and_listing() -> None:
-    assert "No writeups yet" in render_recent([], NAIROBI)
-    text = render_recent([make_writeup(id=2), make_writeup(id=1)], NAIROBI)
+    assert "No writeups yet" in render_recent([], NAIROBI, NOW)
+    text = render_recent([make_writeup(id=2), make_writeup(id=1)], NAIROBI, NOW)
     assert text.index("#2") < text.index("#1")

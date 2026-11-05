@@ -118,7 +118,7 @@ def make_jobs(
 ) -> ReminderJobs:
     config = load_config(env(OWNER_ID=str(OWNER), **settings))
     service = EventService(FakeCtftime(ctftime or []), manual or [], config.lookahead_days)
-    writeups = WriteupHandlers(config, db, Categories(), clock=clock)
+    writeups = WriteupHandlers(config, db, Categories(), service, clock)
     return ReminderJobs(config, db, service, writeups, clock=clock)
 
 

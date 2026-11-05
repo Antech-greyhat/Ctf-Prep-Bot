@@ -88,6 +88,32 @@ def app(tmp_path: Path) -> Iterator[Application]:
     db.close()
 
 
+def test_v3_commands_are_walked_by_the_owner_lock_test(app: Application) -> None:
+    commands = {
+        command
+        for handler, _ in walk(app.handlers[0])
+        if isinstance(handler, CommandHandler)
+        for command in handler.commands
+    }
+    assert {"release", "export"} <= commands
+    patterns = {
+        handler.pattern.pattern
+        for handler, _ in walk(app.handlers[0])
+        if isinstance(handler, OwnerCallbackQueryHandler) and handler.pattern is not None
+    }
+    assert {p for p in patterns if p.startswith(("exp:", "rel:", "log:live", "log:event"))}
+
+
+def test_every_button_pattern_is_anchored(app: Application) -> None:
+    buttons = [h for h, _ in walk(app.handlers[0]) if isinstance(h, OwnerCallbackQueryHandler)]
+    patterned = [h for h in buttons if h.pattern is not None]
+    assert len(patterned) >= 8
+    for handler in patterned:
+        assert handler.pattern.pattern.endswith(r"\Z")
+    # Only the final catch-all has none.
+    assert [h for h in buttons if h.pattern is None] == [buttons[-1]]
+
+
 def test_every_handler_is_owner_locked(app: Application) -> None:
     # A handler type that is not checked here fails this test on purpose.
     gatekeeper, *others = app.handlers[-1]

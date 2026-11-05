@@ -8,6 +8,15 @@ from ctfbot.models import Event
 FIXTURE_NOW = datetime(2026, 10, 14, 12, 0, tzinfo=UTC)
 
 
+class FrozenClock:
+    # Time only moves when a test says so.
+    def __init__(self, now: datetime = FIXTURE_NOW) -> None:
+        self.now = now
+
+    def __call__(self) -> datetime:
+        return self.now
+
+
 def make_event(
     title: str = "Example CTF",
     start: datetime = FIXTURE_NOW,

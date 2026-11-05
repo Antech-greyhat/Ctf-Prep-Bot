@@ -1,12 +1,13 @@
 import json
 import logging
-from datetime import datetime
+from datetime import UTC, datetime
 
 import httpx
 import pytest
 
 from ctfbot import ctftime
 from ctfbot.ctftime import CtftimeClient, CtftimeUnavailable, parse_entry, parse_events
+from ctfbot.sources import EventService
 from tests.helpers import FIXTURE_NOW
 
 
@@ -153,27 +154,28 @@ async def test_results_are_cached_for_an_hour(good_entry: dict[str, object]) -> 
     api = FakeApi([ok([good_entry]), ok([])])
     clock = Clock()
     client = make_client(api, clock)
-    first = await client.upcoming()
+    first = await client.events()
     clock.now = FIXTURE_NOW + ctftime.CACHE_TTL / 2
-    assert await client.upcoming() == first
+    assert await client.events() == first
     assert len(api.requests) == 1
     clock.now = FIXTURE_NOW + ctftime.CACHE_TTL
-    assert await client.upcoming() == []
+    assert await client.events() == []
     assert len(api.requests) == 2
 
 
 async def test_request_sends_user_agent_and_no_finish_param() -> None:
     api = FakeApi([ok([])])
-    await make_client(api).upcoming()
+    await make_client(api).events()
     request = api.requests[0]
     assert request.headers["User-Agent"].startswith("ctf-prep-bot/")
-    assert request.url.params["start"] == str(int(FIXTURE_NOW.timestamp()))
+    window_start = FIXTURE_NOW - ctftime.FETCH_BACK
+    assert request.url.params["start"] == str(int(window_start.timestamp()))
     assert "finish" not in request.url.params
 
 
 async def test_one_retry_after_server_error(good_entry: dict[str, object]) -> None:
     api = FakeApi([httpx.Response(503), ok([good_entry])])
-    events = await make_client(api).upcoming()
+    events = await make_client(api).events()
     assert len(events) == 1
     assert len(api.requests) == 2
 
@@ -181,26 +183,97 @@ async def test_one_retry_after_server_error(good_entry: dict[str, object]) -> No
 async def test_gives_up_after_one_retry() -> None:
     api = FakeApi([httpx.ConnectTimeout("t"), httpx.Response(500), ok([])])
     with pytest.raises(CtftimeUnavailable):
-        await make_client(api).upcoming()
+        await make_client(api).events()
     assert len(api.requests) == 2
 
 
 async def test_client_errors_are_not_retried() -> None:
     api = FakeApi([httpx.Response(404), ok([])])
     with pytest.raises(CtftimeUnavailable):
-        await make_client(api).upcoming()
+        await make_client(api).events()
     assert len(api.requests) == 1
 
 
 async def test_invalid_json_is_unavailable() -> None:
     api = FakeApi([httpx.Response(200, content=b"<html>")])
     with pytest.raises(CtftimeUnavailable):
-        await make_client(api).upcoming()
+        await make_client(api).events()
 
 
 async def test_failures_are_not_cached(good_entry: dict[str, object]) -> None:
     api = FakeApi([httpx.Response(500), httpx.Response(500), ok([good_entry])])
     client = make_client(api)
     with pytest.raises(CtftimeUnavailable):
-        await client.upcoming()
-    assert len(await client.upcoming()) == 1
+        await client.events()
+    assert len(await client.events()) == 1
+
+
+# Running events. Confirmed against the real API: `start` keeps only events that began at or
+# after it, so an event queried from its own midpoint is not returned. This fake applies the
+# same rule, which means a request starting at `now` would find nothing running.
+class StartFilteringApi:
+    def __init__(self, payload: list[dict[str, object]]) -> None:
+        self.payload = payload
+
+    def __call__(self, request: httpx.Request) -> httpx.Response:
+        since = datetime.fromtimestamp(int(request.url.params["start"]), UTC)
+        return ok([e for e in self.payload if datetime.fromisoformat(e["start"]) >= since])
+
+
+# Saturday of the fixture's busiest weekend: HITCON started the day before.
+DURING_HITCON = datetime(2026, 10, 24, 15, 0, tzinfo=UTC)
+RUNNING_THEN = {
+    "HITCON CTF 2026",
+    "RSTCON 2026 CTF",
+    "Hack.lu CTF 2026",
+    "cruXipher 2026 - ATMoS '26, BITS Hyderabad",
+}
+
+
+def fixture_service(payload: list[dict[str, object]], now: datetime) -> EventService:
+    clock = Clock()
+    clock.now = now
+    return EventService(make_client(StartFilteringApi(payload), clock), [], lookahead_days=14)
+
+
+async def test_events_that_already_started_are_found(
+    ctftime_payload: list[dict[str, object]],
+) -> None:
+    result = await fixture_service(ctftime_payload, DURING_HITCON).running(DURING_HITCON)
+    assert {e.title for e in result.events} == RUNNING_THEN
+
+
+async def test_nothing_is_running_between_events(
+    ctftime_payload: list[dict[str, object]],
+) -> None:
+    result = await fixture_service(ctftime_payload, FIXTURE_NOW).running(FIXTURE_NOW)
+    assert result.events == ()
+
+
+async def test_wider_window_does_not_leak_into_upcoming(
+    ctftime_payload: list[dict[str, object]],
+) -> None:
+    upcoming = await fixture_service(ctftime_payload, DURING_HITCON).upcoming(DURING_HITCON)
+    assert RUNNING_THEN.isdisjoint(e.title for e in upcoming.events)
+    assert all(e.start >= DURING_HITCON for e in upcoming.events)
+
+
+async def test_running_and_upcoming_share_one_cached_fetch(
+    good_entry: dict[str, object],
+) -> None:
+    api = FakeApi([ok([good_entry])])
+    service = EventService(make_client(api), [], lookahead_days=14)
+    await service.running(FIXTURE_NOW)
+    await service.upcoming(FIXTURE_NOW)
+    assert len(api.requests) == 1
+
+
+async def test_event_starting_after_the_fetch_counts_as_running_from_the_cache(
+    good_entry: dict[str, object],
+) -> None:
+    good_entry["start"] = "2026-10-14T12:10:00+00:00"
+    clock = Clock()
+    service = EventService(make_client(FakeApi([ok([good_entry])]), clock), [], lookahead_days=14)
+    assert (await service.running(clock.now)).events == ()
+    clock.now = datetime(2026, 10, 14, 12, 20, tzinfo=UTC)
+    assert [e.title for e in (await service.running(clock.now)).events] == ["Example CTF"]

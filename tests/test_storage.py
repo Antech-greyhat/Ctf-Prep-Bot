@@ -1,4 +1,5 @@
 import hashlib
+import logging
 import os
 import sqlite3
 import stat
@@ -19,7 +20,7 @@ from ctfbot.storage import (
     open_database,
     to_db_time,
 )
-from ctfbot.writeups import WriteupDraft
+from ctfbot.writeups import WriteupDraft, is_held
 from tests.helpers import env
 
 NOW = datetime(2026, 10, 16, 12, 0, tzinfo=UTC)
@@ -141,7 +142,10 @@ def test_each_migration_is_one_transaction_that_sets_its_own_version() -> None:
 # A database already upgraded past a migration never runs it again, so editing a released
 # one would silently give old and new installs different schemas. Add a new entry instead,
 # and add its hash here once it is released.
-RELEASED_MIGRATIONS = ("57f700ecb0e3f5ef29c01db5e12e422cf04549d992e0f4b500bde7f2fc9c7f29",)
+RELEASED_MIGRATIONS = (
+    "57f700ecb0e3f5ef29c01db5e12e422cf04549d992e0f4b500bde7f2fc9c7f29",
+    "9afc411ab0bcf983002e925d5087bb07bf321c5b765c49ff33f339667240d9a4",
+)
 
 
 def test_released_migrations_are_never_edited() -> None:
@@ -155,11 +159,15 @@ def test_failed_migration_keeps_the_previous_version(
 ) -> None:
     path = tmp_path / "bot.db"
     open_database(path).close()
-    broken = "BEGIN;\nCREATE TABLE extra (x);\nNOT VALID SQL;\nPRAGMA user_version = 2;\nCOMMIT;"
+    current = len(MIGRATIONS)
+    broken = (
+        "BEGIN;\nCREATE TABLE extra (x);\nNOT VALID SQL;\n"
+        f"PRAGMA user_version = {current + 1};\nCOMMIT;"
+    )
     monkeypatch.setattr(storage, "MIGRATIONS", (*MIGRATIONS, broken))
     with pytest.raises(StorageError, match="could not be prepared"):
         open_database(path)
-    assert user_version(path) == 1
+    assert user_version(path) == current
     with closing(sqlite3.connect(path)) as conn:
         tables = {name for (name,) in conn.execute("SELECT name FROM sqlite_master")}
     assert "extra" not in tables
@@ -246,3 +254,89 @@ def test_times_round_trip_in_utc() -> None:
 def test_naive_times_are_rejected() -> None:
     with pytest.raises(ValueError, match="timezone-aware"):
         to_db_time(datetime(2026, 1, 1))
+
+
+# Holds and the upgrade from schema version 1 -----------------------------------------------
+
+
+def make_v1_database(path: Path) -> None:
+    # Exactly what a v0.2.0 install has on disk, built from the released migration.
+    with closing(sqlite3.connect(path)) as conn:
+        conn.executescript(MIGRATIONS[0])
+        conn.execute(
+            "INSERT INTO writeups (created_at, platform, challenge, category, solved, approach, "
+            "stuck) VALUES (?, ?, ?, ?, ?, ?, ?)",
+            (to_db_time(NOW), "picoCTF", "Old one", "Web", 1, "Old approach.", "Old stuck."),
+        )
+        conn.execute("INSERT INTO state (key, value) VALUES ('tracking_since', 'x')")
+        conn.commit()
+
+
+def test_v1_database_upgrades_and_keeps_its_writeups(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    path = tmp_path / "bot.db"
+    make_v1_database(path)
+    assert user_version(path) == 1
+
+    with caplog.at_level(logging.INFO, logger="ctfbot.storage"):
+        database = open_database(path)
+    try:
+        assert "Database upgraded to schema version 2" in caplog.text
+        assert "schema version 1" not in caplog.text
+        [old] = database.recent_writeups(5)
+        assert (old.id, old.challenge, old.approach) == (1, "Old one", "Old approach.")
+        assert (old.stuck, old.solved, old.created_at) == ("Old stuck.", True, NOW)
+        assert (old.hold_until, old.hold_event) == (None, None)
+        assert not is_held(old, NOW)
+        assert database.get_state("tracking_since") == "x"
+        # New rows keep counting from the old IDs.
+        assert database.add_writeup(draft(), NOW) == 2
+    finally:
+        database.close()
+    assert user_version(path) == 2
+
+
+def test_upgraded_and_fresh_databases_have_the_same_columns(tmp_path: Path) -> None:
+    upgraded, fresh = tmp_path / "upgraded.db", tmp_path / "fresh.db"
+    make_v1_database(upgraded)
+    open_database(upgraded).close()
+    open_database(fresh).close()
+
+    def columns(path: Path) -> list[tuple[object, ...]]:
+        with closing(sqlite3.connect(path)) as conn:
+            return conn.execute("PRAGMA table_info(writeups)").fetchall()
+
+    assert columns(upgraded) == columns(fresh)
+
+
+def test_hold_columns_are_nullable_text(db: Database) -> None:
+    info = {row[1]: row for row in db._conn.execute("PRAGMA table_info(writeups)")}
+    for name in ("hold_until", "hold_event"):
+        assert info[name][2] == "TEXT"
+        assert info[name][3] == 0
+
+
+def test_hold_round_trip_in_utc(db: Database) -> None:
+    until = NOW + timedelta(days=1)
+    writeup_id = db.add_writeup(draft(), NOW, until.astimezone(), "Example CTF")
+    stored = db.get_writeup(writeup_id)
+    assert stored is not None
+    assert stored.hold_until == to_db_time(until)
+    assert stored.hold_event == "Example CTF"
+    assert db.recent_writeups(1) == [stored]
+
+
+def test_no_hold_is_stored_as_null(db: Database) -> None:
+    stored = db.get_writeup(db.add_writeup(draft(), NOW))
+    assert stored is not None
+    assert (stored.hold_until, stored.hold_event) == (None, None)
+
+
+def test_damaged_hold_does_not_break_reading_the_log(db: Database) -> None:
+    writeup_id = db.add_writeup(draft(), NOW)
+    with db._conn:
+        db._conn.execute("UPDATE writeups SET hold_until = 'garbage' WHERE id = ?", (writeup_id,))
+    [stored] = db.recent_writeups(1)
+    assert stored.hold_until == "garbage"
+    assert is_held(stored, NOW)
