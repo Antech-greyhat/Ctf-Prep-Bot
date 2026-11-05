@@ -74,9 +74,13 @@ You run your own instance with your own bot token, and it answers **only you**.
 
 **Writeup log**
 * **`/log`** walks you through recording a challenge you solved *or attempted*: platform,
-  challenge, category, result, how you solved it (or what you tried) and where you got stuck.
-  Categories and the result are buttons. Flag-shaped text is removed before saving.
+  whether it's from a live CTF, challenge, category, result, how you solved it (or what you
+  tried) and where you got stuck. Categories and the result are buttons. Flag-shaped text is
+  removed before saving.
 * **`/recent`**, **`/show <id>`** and **`/delete <id>`** to read back and manage entries.
+* **Live-CTF holds** keep a writeup out of exports until its CTF ends. **`/release <id>`** ends
+  one early.
+* **`/export`** sends your writeups as a ZIP of Markdown files, ready for a GitHub repo.
 * **`/stats`** shows progress per category against your own *fundamentals-first* order, names
   the category to focus on, and warns you when you keep jumping ahead of it.
 * **Inactivity nudge** after a few days without a writeup, naming your current focus.
@@ -129,6 +133,8 @@ outbound HTTPS.
      show - Read one writeup
      delete - Delete one writeup
      stats - Progress by category and your focus
+     release - End a live-CTF hold early
+     export - Download your writeups as Markdown
      cancel - Stop the current log
      ```
 3. **Clone and install.**
@@ -175,6 +181,7 @@ outbound HTTPS.
    * `/events` lists upcoming events.
    * `/digest` sends the digest.
    * `/log` walks you through a writeup, `/recent` lists it and `/stats` counts it.
+   * Log a writeup as live: `/export` holds it back. `/release` it and it is exported.
    * A `data/` folder now holds `ctfbot.db`, readable only by you: `ls -l data` shows
      `-rw-------` (Linux/macOS).
 9. **Optional: run it 24/7 without Docker.** Use systemd with an unprivileged user,
@@ -202,6 +209,8 @@ outbound HTTPS.
 | `/recent` | Your 10 latest writeups with their IDs |
 | `/show <id>` | One writeup in full |
 | `/delete <id>` | Deletes one writeup, after asking you to confirm |
+| `/release <id>` | Ends a live-CTF hold early, after asking you to confirm |
+| `/export` | Sends a ZIP of Markdown writeups; buttons choose what goes in it |
 | `/stats` | Progress per category, your focus, and a warning if you jump ahead |
 | `/cancel` | Stops the current `/log` (nothing is saved) |
 | `/skip` | During `/log`: skip "where did you get stuck" for a solved challenge (anywhere else the bot says so and the current question stands) |
@@ -281,6 +290,103 @@ The inactivity nudge is sent once per quiet period; logging a writeup starts a n
 fresh install the first quiet period starts when the bot first runs. Each CTF gets one
 reminder. Both are remembered in the database, so restarting the bot never repeats one. A
 reminder Telegram refuses is retried the next hour without holding up the others.
+
+### Live-CTF holds
+
+Publishing a writeup while a CTF is still running is a spoiler, and against the rules of most
+CTFs. So right after the platform, `/log` asks **"Is this from a live CTF?"**
+
+* **No:** there is no hold.
+* **Yes:** you get the CTFs running right now, from CTFtime and `events.toml`, as buttons (at
+  most 8, soonest to finish first). Picking one holds the writeup until that CTF finishes.
+* **Not listed:** send the end time as `YYYY-MM-DD HH:MM` in your `TIMEZONE`, at most 30 days
+  ahead. The platform you typed is recorded as the CTF's name. Use this for anything the list
+  can't show: CTFs the filters above leave out, or ones running longer than 14 days.
+
+If CTFtime is unavailable you still get the `events.toml` CTFs and "Not listed", with a notice.
+The save message says `🔒 Private until <local time>`, and `/recent` and `/show` show the same
+line while the hold lasts.
+
+A hold ends by itself, and nothing is sent when it does. `/release <id>` ends one sooner, for
+when organisers allow writeups early or the time was wrong.
+
+**What a hold is and isn't:**
+
+* **The hold only controls `/export`.** You can still read a held writeup with `/show`, and it
+  still counts in `/stats`.
+* **The hold is a minimum, not a guarantee.** The bot knows when a CTF ends, not what its
+  rules say. Some CTFs ask you to wait longer, or forbid writeups for certain challenges.
+* **Check each CTF's writeup rules** before you publish anything.
+* **Flags are removed, but approaches are still spoilers.** The steps of a solution give a
+  challenge away even with no flag in them.
+
+If a hold's stored time can't be read, the writeup is treated as held and a warning with its
+ID goes to the log. `/release` clears it.
+
+### Exporting
+
+`/export` asks what to export:
+
+| Button | What it exports |
+|---|---|
+| All writeups | Everything |
+| Since last export | What became exportable since the last "All" or "Since" export |
+| Last 30 days | Writeups logged in the last 30 days |
+| One category | Then pick from the categories in `categories.toml` |
+
+You get a ZIP like this, with the newest writeups first in the index:
+
+```text
+ctf-writeups-2026-10-26.zip
+├── README.md                                   index: date, challenge, platform, category, result
+├── 2026-10-26-picoctf-cookies-14.md
+└── 2026-10-25-hack-lu-ctf-2026-baby-rsa-13.md
+```
+
+And each file looks like this:
+
+```markdown
+---
+id: 13
+date: "2026-10-25"
+platform: "Hack.lu CTF 2026"
+challenge: "Baby RSA"
+category: "Crypto"
+solved: false
+live_ctf: "Hack.lu CTF 2026"
+---
+
+# Baby RSA
+
+> ❌ Unsolved attempt
+
+## What I tried
+
+Factored n with yafu...
+
+## Where I got stuck
+
+The padding...
+
+---
+
+Exported by [ctf-prep-bot](https://github.com/Antech-greyhat/ctf-prep-bot).
+```
+
+* **Held writeups are never included while held.** The reply says how many were held back and
+  when the next hold ends. This applies to every button.
+* **Unsolved attempts are included** and clearly marked.
+* **"Since last export" doesn't lose held writeups.** A writeup counts as new from the moment
+  it became exportable, so one that was held through an export comes through once its hold
+  ends. In the rare case one is logged in the same second as an export, it can appear twice
+  rather than go missing.
+* **Only "All writeups" and "Since last export" move the marker**, and only after Telegram
+  accepts the file. A failed send can simply be retried. "Last 30 days" and "One category"
+  leave it alone, because they don't cover everything new.
+* **An empty selection** replies "Nothing to export" and sends no file.
+
+`live_ctf` is the CTF's title, or `false` if the writeup wasn't from a live CTF. It stays after
+the hold ends, because the writeup still came from that CTF. A hold's end time isn't exported.
 
 <p align="right">(<a href="#readme-top">back to top</a>)</p>
 
@@ -395,6 +501,27 @@ control (CTFtime). This is what is protected and how.
 * **Safe upgrades.** The schema version is stored in the file. Each upgrade runs in a single
   transaction, and a database from a newer bot version is refused instead of damaged. A test
   pins each released migration's hash, so one can't be edited after release by mistake.
+* **Holds fail safe.** Every check takes the time as an argument, and a hold that can't be read
+  counts as held. See [Live-CTF holds](#live-ctf-holds) for what a hold does not promise.
+
+### Exports
+
+* **Sent only to you.** The file goes to `OWNER_ID`, not to whichever chat a button press
+  claims to come from. Every command and button is behind the owner lock, and a test walks
+  all of them.
+* **Nothing on disk.** The ZIP is built in memory, using only the standard library.
+* **Safe file names.** Names inside the ZIP use only `a-z`, `0-9` and `-`, plus `.md`, at most
+  80 characters, and end in the writeup's ID. A challenge named `../../etc/passwd` can't
+  escape the folder it is unpacked into.
+* **Safe front matter.** Values are written with `json.dumps`, which is valid YAML. A title
+  with `:`, `---` or a line break can't end the block or add a key. Non-ASCII text appears as
+  `\uXXXX`, which YAML reads back correctly; that is the price of no character being able to
+  act as a line break.
+* **Flags are removed again.** Redaction runs over all exported text, including names and
+  event titles, which `/log` doesn't redact. It runs before names are built, so a challenge
+  called `flag{...}` can't leak through its file name. The reply reports the count.
+* **Button data is never trusted.** Buttons carry an index or ID, not a title or time. Patterns
+  are anchored, and each value is checked again in the handler.
 
 ### Network behaviour
 
@@ -420,6 +547,11 @@ control (CTFtime). This is what is protected and how.
   the filesystem or an SSD has already moved elsewhere may still hold deleted text. Full-disk
   encryption is the answer to that.
 * Restarting the bot loses a `/log` that wasn't finished.
+* Your notes are exported as written. A payload such as `<script>` in a writeup is plain text
+  in the file, but a static-site generator may treat it as HTML if you publish it. Titles and
+  index cells are escaped; notes are not, because escaping would corrupt code samples.
+* `/recent` and `/show` display a challenge name as you typed it. Only notes are redacted when
+  saving, so don't put a flag in a challenge name; only `/export` removes it from names.
 
 <p align="right">(<a href="#readme-top">back to top</a>)</p>
 
@@ -445,8 +577,9 @@ src/ctfbot/
   handlers.py       owner lock (commands and buttons) and event commands
   digest.py         weekly digest scheduling
   storage.py        SQLite: schema migrations, writeups, scheduler state
-  writeups.py       writeup dataclasses, input cleaning, flag redaction
-  writeup_handlers.py  /log conversation, /recent, /show, /delete, /stats
+  writeups.py       writeup dataclasses, input cleaning, flag redaction, holds
+  writeup_handlers.py  /log conversation, /recent, /show, /delete, /release, /export, /stats
+  export.py         Markdown rendering and ZIP building (pure functions)
   categories.py     category order loading and validation
   progress.py       /stats rules (pure functions)
   reminders.py      inactivity nudge and CTF reminders
@@ -465,7 +598,8 @@ src/ctfbot/
 - [x] Weakness report by category
 - [x] Inactivity nudges
 - [x] Reminders before each CTF
-- [ ] Export writeups to Markdown for a GitHub repo (manual, only after an event ends)
+- [x] Live-CTF holds
+- [x] Export writeups to Markdown (manual, only after an event ends)
 
 See the [open issues](https://github.com/Antech-greyhat/ctf-prep-bot/issues) for proposed
 features and known issues.

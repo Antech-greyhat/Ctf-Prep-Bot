@@ -142,7 +142,10 @@ def test_each_migration_is_one_transaction_that_sets_its_own_version() -> None:
 # A database already upgraded past a migration never runs it again, so editing a released
 # one would silently give old and new installs different schemas. Add a new entry instead,
 # and add its hash here once it is released.
-RELEASED_MIGRATIONS = ("57f700ecb0e3f5ef29c01db5e12e422cf04549d992e0f4b500bde7f2fc9c7f29",)
+RELEASED_MIGRATIONS = (
+    "57f700ecb0e3f5ef29c01db5e12e422cf04549d992e0f4b500bde7f2fc9c7f29",
+    "9afc411ab0bcf983002e925d5087bb07bf321c5b765c49ff33f339667240d9a4",
+)
 
 
 def test_released_migrations_are_never_edited() -> None:

@@ -535,7 +535,8 @@ class WriteupHandlers:
         if choice == "all":
             await self._run_export(query, context, everything, now, moves_marker=True)
         elif choice == "since":
-            await self._run_export(query, context, new_since(self._last_export()), now, True)
+            keep = new_since(self._last_export())
+            await self._run_export(query, context, keep, now, moves_marker=True)
         else:
             keep = created_since(now - EXPORT_RECENT_WINDOW)
             await self._run_export(query, context, keep, now, moves_marker=False)
