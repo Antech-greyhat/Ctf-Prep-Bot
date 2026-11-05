@@ -22,6 +22,9 @@ MAX_RETRIES = 1
 RETRY_BACKOFF_SECONDS = 2.0
 # No `finish` param: CTFtime applies it to event end times, which drops long events.
 FETCH_LIMIT = 100
+# `start` filters on when an event began, so a CTF already under way only comes back if the
+# window opens before it started. Callers narrow the list by time, so old events are harmless.
+FETCH_BACK = timedelta(days=14)
 
 # Event filters. Other values seen: Attack-Defense; Prequalified, Academic, Casual.
 ONLINE_ONLY = True
@@ -114,7 +117,8 @@ class CtftimeClient:
         self._cached_events: list[Event] = []
         self._lock = asyncio.Lock()
 
-    async def upcoming(self) -> list[Event]:
+    async def events(self) -> list[Event]:
+        # Everything from FETCH_BACK onwards: finished, running and upcoming events alike.
         async with self._lock:
             now = self._clock()
             if self._cached_at is not None and now - self._cached_at < CACHE_TTL:
@@ -124,7 +128,7 @@ class CtftimeClient:
             return events
 
     async def _fetch(self, now: datetime) -> object:
-        params = {"start": int(now.timestamp()), "limit": FETCH_LIMIT}
+        params = {"start": int((now - FETCH_BACK).timestamp()), "limit": FETCH_LIMIT}
         problem = ""
         for attempt in range(1 + MAX_RETRIES):
             if attempt:
@@ -148,7 +152,7 @@ class CtftimeClient:
 
 async def _print_upcoming(days: int) -> None:
     async with make_http_client() as http:
-        events = await CtftimeClient(http).upcoming()
+        events = await CtftimeClient(http).events()
     for event in starting_within(events, datetime.now(UTC), days):
         print(f"{event.start:%Y-%m-%d %H:%M} UTC  {event.title}  {event.url or ''}")
 

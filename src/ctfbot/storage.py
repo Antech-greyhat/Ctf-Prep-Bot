@@ -37,6 +37,18 @@ MIGRATIONS: tuple[str, ...] = (
     PRAGMA user_version = 1;
     COMMIT;
     """,
+    """
+    BEGIN;
+    -- NULL hold_until: never held, so every writeup from before this version stays exportable.
+    ALTER TABLE writeups ADD COLUMN hold_until TEXT;
+    ALTER TABLE writeups ADD COLUMN hold_event TEXT;
+    PRAGMA user_version = 2;
+    COMMIT;
+    """,
+)
+
+_WRITEUP_COLUMNS = (
+    "id, created_at, platform, challenge, category, solved, approach, stuck, hold_until, hold_event"
 )
 
 
@@ -63,12 +75,19 @@ class Database:
         self._conn.close()
 
     # Writeups. Every query uses ? placeholders; user text is never put into SQL strings.
+    # The only f-strings insert _WRITEUP_COLUMNS, a constant, which is why they carry a noqa.
 
-    def add_writeup(self, draft: WriteupDraft, now: datetime) -> int:
+    def add_writeup(
+        self,
+        draft: WriteupDraft,
+        now: datetime,
+        hold_until: datetime | None = None,
+        hold_event: str | None = None,
+    ) -> int:
         with self._conn:
             cursor = self._conn.execute(
                 "INSERT INTO writeups (created_at, platform, challenge, category, solved, "
-                "approach, stuck) VALUES (?, ?, ?, ?, ?, ?, ?)",
+                "approach, stuck, hold_until, hold_event) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 (
                     to_db_time(now),
                     draft.platform,
@@ -77,22 +96,22 @@ class Database:
                     int(draft.solved),
                     draft.approach,
                     draft.stuck,
+                    to_db_time(hold_until) if hold_until else None,
+                    hold_event,
                 ),
             )
         return int(cursor.lastrowid)
 
     def get_writeup(self, writeup_id: int) -> Writeup | None:
         row = self._conn.execute(
-            "SELECT id, created_at, platform, challenge, category, solved, approach, stuck "
-            "FROM writeups WHERE id = ?",
+            f"SELECT {_WRITEUP_COLUMNS} FROM writeups WHERE id = ?",  # noqa: S608
             (writeup_id,),
         ).fetchone()
         return _to_writeup(row) if row else None
 
     def recent_writeups(self, limit: int) -> list[Writeup]:
         rows = self._conn.execute(
-            "SELECT id, created_at, platform, challenge, category, solved, approach, stuck "
-            "FROM writeups ORDER BY id DESC LIMIT ?",
+            f"SELECT {_WRITEUP_COLUMNS} FROM writeups ORDER BY id DESC LIMIT ?",  # noqa: S608
             (limit,),
         ).fetchall()
         return [_to_writeup(row) for row in rows]
@@ -219,7 +238,18 @@ def _migrate(connection: sqlite3.Connection) -> None:
 
 
 def _to_writeup(row: tuple[object, ...]) -> Writeup:
-    writeup_id, created_at, platform, challenge, category, solved, approach, stuck = row
+    (
+        writeup_id,
+        created_at,
+        platform,
+        challenge,
+        category,
+        solved,
+        approach,
+        stuck,
+        hold_until,
+        hold_event,
+    ) = row
     return Writeup(
         id=int(writeup_id),
         created_at=from_db_time(str(created_at)),
@@ -229,4 +259,6 @@ def _to_writeup(row: tuple[object, ...]) -> Writeup:
         solved=bool(solved),
         approach=str(approach),
         stuck=str(stuck),
+        hold_until=None if hold_until is None else str(hold_until),
+        hold_event=None if hold_event is None else str(hold_event),
     )

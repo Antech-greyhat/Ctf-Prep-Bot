@@ -58,3 +58,7 @@ def parse_utc(value: str) -> datetime:
 def starting_within(events: list[Event], now: datetime, days: float) -> list[Event]:
     end = now + timedelta(days=days)
     return [event for event in events if now <= event.start <= end]
+
+
+def running_at(events: list[Event], now: datetime) -> list[Event]:
+    return [event for event in events if event.start <= now < event.finish]
