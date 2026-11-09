@@ -54,6 +54,8 @@ def test_fixture_times_are_utc(ctftime_payload: list[dict[str, object]]) -> None
         ("start", 1760000000),
         ("start", "2026-10-20T10:00:00"),
         ("start", "soon"),
+        ("start", "0001-01-01T00:00:00+01:00"),
+        ("finish", "9999-12-31T23:59:59-01:00"),
         ("finish", "2026-10-01T10:00:00+00:00"),
         ("onsite", "false"),
         ("onsite", 0),

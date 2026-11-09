@@ -83,6 +83,8 @@ class Draft:
     # Kept in context.user_data, which lives in memory only: no persistence file, because
     # loading a tampered pickle executes code. A restart loses an unfinished /log.
     platform: str = ""
+    # Bind replies to the current prompt, not just its step or callback pattern.
+    button_message_id: int | None = None
     # The events behind the buttons on screen. The buttons only carry an index into this,
     # so a modified client can pick from what was offered but can't supply a title or time.
     running: tuple[Event, ...] = ()
@@ -220,16 +222,30 @@ class WriteupHandlers:
         value = await self._read_name(update, "platform")
         if value is None:
             return PLATFORM
-        _draft(context).platform = value
-        await update.effective_message.reply_text(
+        draft = _draft(context)
+        draft.platform = value
+        prompt = await update.effective_message.reply_text(
             formatting.LOG_ASK_LIVE, reply_markup=LIVE_KEYBOARD
         )
+        draft.button_message_id = prompt.message_id
         return LIVE
+
+    async def _answer_draft_button(
+        self, update: Update, context: ContextTypes.DEFAULT_TYPE
+    ) -> bool:
+        query = update.callback_query
+        draft = context.user_data.get(DRAFT_KEY)
+        if draft is None or draft.button_message_id != query.message.message_id:
+            await self.expired_button(update, context)
+            return False
+        # Answer before any network lookup, so the client's spinner stops promptly.
+        await query.answer()
+        return True
 
     async def got_live(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
         query = update.callback_query
-        # Answered first: asking CTFtime can take seconds and this stops the client's spinner.
-        await query.answer()
+        if not await self._answer_draft_button(update, context):
+            return LIVE
         match = LIVE_DATA.fullmatch(query.data or "")
         if not match:
             return LIVE
@@ -242,14 +258,16 @@ class WriteupHandlers:
             return CHALLENGE
         running = await self._service.running(self._clock())
         draft.running = running.events[:MAX_EVENT_BUTTONS]
-        await query.message.reply_text(
+        prompt = await query.message.reply_text(
             formatting.log_ask_event(running), reply_markup=event_keyboard(draft.running)
         )
+        draft.button_message_id = prompt.message_id
         return LIVE_EVENT
 
     async def got_event(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
         query = update.callback_query
-        await query.answer()
+        if not await self._answer_draft_button(update, context):
+            return LIVE_EVENT
         match = EVENT_DATA.fullmatch(query.data or "")
         if not match:
             return LIVE_EVENT
@@ -286,28 +304,36 @@ class WriteupHandlers:
         value = await self._read_name(update, "challenge name")
         if value is None:
             return CHALLENGE
-        _draft(context).challenge = value
-        await update.effective_message.reply_text(
+        draft = _draft(context)
+        draft.challenge = value
+        prompt = await update.effective_message.reply_text(
             formatting.LOG_ASK_CATEGORY, reply_markup=category_keyboard(self._categories)
         )
+        draft.button_message_id = prompt.message_id
         return CATEGORY
 
     async def got_category(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
         query = update.callback_query
-        await query.answer()
+        if not await self._answer_draft_button(update, context):
+            return CATEGORY
         match = CATEGORY_DATA.fullmatch(query.data or "")
         index = int(match[1]) if match else -1
         if not 0 <= index < len(self._categories.order):
             return CATEGORY
         name = self._categories.order[index]
-        _draft(context).category = name
+        draft = _draft(context)
+        draft.category = name
         await query.edit_message_text(f"Category: <b>{html.escape(name)}</b>")
-        await query.message.reply_text(formatting.LOG_ASK_RESULT, reply_markup=RESULT_KEYBOARD)
+        prompt = await query.message.reply_text(
+            formatting.LOG_ASK_RESULT, reply_markup=RESULT_KEYBOARD
+        )
+        draft.button_message_id = prompt.message_id
         return RESULT
 
     async def got_result(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
         query = update.callback_query
-        await query.answer()
+        if not await self._answer_draft_button(update, context):
+            return RESULT
         match = RESULT_DATA.fullmatch(query.data or "")
         if not match:
             return RESULT
@@ -410,15 +436,24 @@ class WriteupHandlers:
         context.user_data.pop(DRAFT_KEY, None)
         # A picked event can finish while the rest of /log is being answered.
         private = draft.hold_until is not None and now < draft.hold_until
-        await update.effective_message.reply_text(
-            formatting.render_saved(
-                writeup_id,
-                writeup,
-                sum(draft.redactions.values()),
-                draft.hold_until if private else None,
-                self._config.timezone,
+        try:
+            await update.effective_message.reply_text(
+                formatting.render_saved(
+                    writeup_id,
+                    writeup,
+                    sum(draft.redactions.values()),
+                    draft.hold_until if private else None,
+                    self._config.timezone,
+                )
             )
-        )
+        except TelegramError as exc:
+            # The writeup is committed and the draft removed. Still end the conversation,
+            # otherwise retrying the last answer raises KeyError against the missing draft.
+            logger.warning(
+                "Writeup #%d saved, but confirmation could not be sent (%s)",
+                writeup_id,
+                type(exc).__name__,
+            )
         return ConversationHandler.END
 
     # Reading and deleting.

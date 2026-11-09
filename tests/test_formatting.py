@@ -35,6 +35,14 @@ def test_daylight_saving_is_respected() -> None:
 
 
 @pytest.mark.parametrize(
+    "start", [datetime(2026, 3, 28, tzinfo=UTC), datetime(2026, 10, 24, tzinfo=UTC)]
+)
+def test_event_duration_across_clock_changes_is_elapsed_time(start: datetime) -> None:
+    event = make_event(start=start, hours=36)
+    assert "(36h)" in render_event(event, BERLIN)
+
+
+@pytest.mark.parametrize(
     ("hours", "expected"), [(6, "6h"), (47, "47h"), (48, "2d"), (60, "2d 12h")]
 )
 def test_duration(hours: int, expected: str) -> None:
