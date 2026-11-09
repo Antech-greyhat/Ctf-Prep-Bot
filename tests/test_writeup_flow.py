@@ -242,6 +242,29 @@ async def test_save_failure_keeps_the_draft_and_logs_no_text(
         assert "Removed 1 flag-like string(s)" in bot.telegram.last_text()
 
 
+async def test_failed_save_confirmation_still_ends_the_conversation(tmp_path: Path) -> None:
+    async with running_bot(tmp_path) as bot:
+        chat = bot.chat()
+        await log_until_notes(chat)
+        await chat.send("approach")
+        bot.telegram.failing.add("sendMessage")
+        await chat.send("/skip")
+        bot.telegram.failing.clear()
+
+        [saved] = bot.db.recent_writeups(5)
+        assert saved.challenge == "Cookies"
+        assert DRAFT_KEY not in bot.app.user_data[OWNER]
+        assert not bot.log_conversation().timeout_jobs
+        await chat.send("/skip")
+        assert bot.telegram.last_text() == formatting.NOTHING_TO_SKIP
+        await chat.send("/cancel")
+        assert bot.telegram.last_text() == formatting.NOTHING_TO_CANCEL
+        assert bot.db.recent_writeups(5) == [saved]
+
+        await save_one(bot, "Next challenge")
+        assert len(bot.db.recent_writeups(5)) == 2
+
+
 # Strangers, groups and stale buttons --------------------------------------------------------
 
 

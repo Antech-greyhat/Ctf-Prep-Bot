@@ -39,7 +39,15 @@ def test_parse_utc_converts_offsets_to_utc() -> None:
     assert parse_utc("2026-10-17T12:00:00+03:00") == datetime(2026, 10, 17, 9, 0, tzinfo=UTC)
 
 
-@pytest.mark.parametrize("value", ["2026-10-17T12:00:00", "not a date"])
+@pytest.mark.parametrize(
+    "value",
+    [
+        "2026-10-17T12:00:00",
+        "not a date",
+        "0001-01-01T00:00:00+01:00",
+        "9999-12-31T23:59:59-01:00",
+    ],
+)
 def test_parse_utc_rejects_naive_or_invalid(value: str) -> None:
     with pytest.raises(ValueError):
         parse_utc(value)

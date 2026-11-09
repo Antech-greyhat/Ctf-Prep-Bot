@@ -53,6 +53,8 @@ def test_invalid_toml_names_the_file(tmp_path: Path) -> None:
         ("start = 2026-11-07T09:00:00+03:00", "start = 2026-11-07T09:00:00", "'start' must be"),
         ("start = 2026-11-07T09:00:00+03:00", "start = 2026-11-07", "'start' must be"),
         ("start = 2026-11-07T09:00:00+03:00", 'start = "2026-11-07T09:00"', "'start' must be"),
+        ("start = 2026-11-07T09:00:00+03:00", "start = 0001-01-01T00:00:00+01:00", "'start'"),
+        ("finish = 2026-11-07T17:00:00+03:00", "finish = 9999-12-31T23:59:59-01:00", "'finish'"),
         ("finish = 2026-11-07T17:00:00+03:00", "finish = 2026-11-06T17:00:00+03:00", "before"),
         ('url = "https://ctf.example.org/"', 'url = "javascript:alert(1)"', "'url'"),
         ('url = "https://ctf.example.org/"', 'link = "https://x.org"', "unknown key"),
