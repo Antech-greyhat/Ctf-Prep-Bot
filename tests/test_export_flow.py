@@ -78,6 +78,56 @@ async def test_buttons_are_removed_before_the_file_is_sent(tmp_path: Path) -> No
         methods = [call.method for call in bot.telegram.calls]
         assert methods.index("editMessageText") < methods.index("sendDocument")
         assert bot.telegram.sent("editMessageText")[-1].text == formatting.EXPORT_WORKING
+
+
+@pytest.mark.parametrize("data", ["exp:all", "exp:since", "exp:recent", "exp:cat:1"])
+async def test_stale_export_buttons_do_nothing_without_a_current_menu(
+    tmp_path: Path, data: str
+) -> None:
+    async with running_bot(tmp_path, clock=FrozenClock(NOW)) as bot:
+        bot.db.add_writeup(entry(), NOW)
+        await bot.chat().press(data)
+        assert documents(bot) == 0
+        assert bot.db.get_state(LAST_EXPORT_KEY) is None
+        assert bot.telegram.sent("answerCallbackQuery")[-1].params["text"] == (
+            formatting.BUTTON_EXPIRED
+        )
+
+
+@pytest.mark.parametrize("presses", [("exp:all",), ("exp:category", "exp:cat:1")])
+async def test_double_tap_sends_only_one_archive(tmp_path: Path, presses: tuple[str, ...]) -> None:
+    async with running_bot(tmp_path, clock=FrozenClock(NOW)) as bot:
+        bot.db.add_writeup(entry(), NOW)
+        await press_export(bot, *presses, presses[-1])
+        assert documents(bot) == 1
+        assert bot.telegram.sent("answerCallbackQuery")[-1].params["text"] == (
+            formatting.BUTTON_EXPIRED
+        )
+
+
+async def test_new_export_menu_invalidates_the_previous_one(tmp_path: Path) -> None:
+    async with running_bot(tmp_path, clock=FrozenClock(NOW)) as bot:
+        bot.db.add_writeup(entry(), NOW)
+        chat = bot.chat()
+        await chat.send("/export")
+        old_message_id = bot.telegram.button_message_id(OWNER)
+        await chat.send("/export")
+        current_message_id = bot.telegram.button_message_id(OWNER)
+        assert old_message_id != current_message_id
+        await chat.press("exp:all", message_id=old_message_id)
+        assert documents(bot) == 0
+        await chat.press("exp:all", message_id=current_message_id)
+        assert documents(bot) == 1
+
+
+async def test_old_export_choice_cannot_replace_the_category_menu(tmp_path: Path) -> None:
+    async with running_bot(tmp_path, clock=FrozenClock(NOW)) as bot:
+        bot.db.add_writeup(entry(), NOW)
+        await press_export(bot, "exp:category", "exp:all")
+        assert documents(bot) == 0
+        assert not bot.telegram.sent("editMessageReplyMarkup")
+        await bot.chat().press("exp:cat:1")
+        assert documents(bot) == 1
         assert bot.telegram.sent("editMessageText")[-1].buttons == []
 
 
@@ -196,6 +246,25 @@ async def test_failed_send_does_not_advance_since_last_export(
         await press_export(bot, "exp:since")
         assert exported_names(bot) == ["2026-10-24-picoctf-cookies-1.md"]
         assert bot.db.get_state(LAST_EXPORT_KEY) == to_db_time(clock.now)
+
+
+@pytest.mark.parametrize(
+    "stored",
+    ["damaged-private-value", "2026-10-24T12:00:00", "0001-01-01T00:00:00+01:00"],
+)
+async def test_damaged_export_marker_reexports_available_writeups(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture, stored: str
+) -> None:
+    async with running_bot(tmp_path, clock=FrozenClock(NOW)) as bot:
+        bot.db.add_writeup(entry("Available"), NOW - HOUR)
+        bot.db.add_writeup(entry("Held"), NOW - HOUR, NOW + HOUR, "Live CTF")
+        bot.db.set_state(LAST_EXPORT_KEY, stored)
+        await press_export(bot, "exp:since")
+        assert exported_names(bot) == ["2026-10-24-picoctf-available-1.md"]
+        assert bot.db.get_state(LAST_EXPORT_KEY) == to_db_time(NOW)
+        assert "Held back: 1" in bot.telegram.last_text()
+        assert "unreadable" in caplog.text
+        assert stored not in caplog.text
 
 
 async def test_held_writeup_comes_through_once_after_its_hold_expires(tmp_path: Path) -> None:

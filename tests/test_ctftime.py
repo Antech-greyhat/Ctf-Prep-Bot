@@ -1,12 +1,13 @@
 import json
 import logging
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 import httpx
 import pytest
 
 from ctfbot import ctftime
 from ctfbot.ctftime import CtftimeClient, CtftimeUnavailable, parse_entry, parse_events
+from ctfbot.models import Event
 from ctfbot.sources import EventService
 from tests.helpers import FIXTURE_NOW
 
@@ -93,8 +94,12 @@ def test_malformed_warning_logs_id_but_not_values(
     assert "injected" not in caplog.text
 
 
-def test_unsafe_url_falls_back_to_ctftime_page(good_entry: dict[str, object]) -> None:
-    good_entry["url"] = "javascript:alert(1)"
+@pytest.mark.parametrize(
+    "url",
+    ["javascript:alert(1)", "http://@", "https://example.org:bad/", "https://example.org/\x00"],
+)
+def test_unsafe_url_falls_back_to_ctftime_page(good_entry: dict[str, object], url: str) -> None:
+    good_entry["url"] = url
     event = parse_entry(good_entry)
     assert event is not None
     assert event.url == "https://ctftime.org/event/1/"
@@ -184,6 +189,28 @@ async def test_gives_up_after_one_retry() -> None:
     api = FakeApi([httpx.ConnectTimeout("t"), httpx.Response(500), ok([])])
     with pytest.raises(CtftimeUnavailable):
         await make_client(api).events()
+    assert len(api.requests) == 2
+
+
+async def test_decoding_error_is_retried(good_entry: dict[str, object]) -> None:
+    api = FakeApi([httpx.DecodingError("bad compressed data"), ok([good_entry])])
+    assert len(await make_client(api).events()) == 1
+    assert len(api.requests) == 2
+
+
+async def test_decoding_outage_keeps_manual_events_available() -> None:
+    api = FakeApi([httpx.DecodingError("bad data"), httpx.DecodingError("bad data")])
+    manual = Event(
+        title="Local CTF",
+        start=FIXTURE_NOW + timedelta(days=1),
+        finish=FIXTURE_NOW + timedelta(days=2),
+        url=None,
+        source="manual",
+    )
+    service = EventService(make_client(api), [manual], lookahead_days=14)
+    result = await service.upcoming(FIXTURE_NOW)
+    assert result.events == (manual,)
+    assert not result.ctftime_ok
     assert len(api.requests) == 2
 
 

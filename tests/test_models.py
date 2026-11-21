@@ -21,6 +21,14 @@ def test_http_urls_are_accepted(url: str) -> None:
         "//example.org",
         "https://exa mple.org",
         "https://example.org/" + "a" * 500,
+        "http://@",
+        "https://user@",
+        "https://:443/path",
+        "https://example.org:bad/",
+        "https://example.org:65536/",
+        "https://example.org/\x00hidden",
+        "https://exa\x1bmple.org/",
+        "https://example.org/\u202eevil",
     ],
 )
 def test_non_http_or_suspicious_urls_are_rejected(url: str) -> None:

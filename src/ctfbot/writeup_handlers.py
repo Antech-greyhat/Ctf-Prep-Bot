@@ -60,6 +60,7 @@ MAX_EVENT_BUTTONS = 8
 MAX_BUTTON_TITLE = 40
 DRAFT_KEY = "writeup_draft"
 LAST_EXPORT_KEY = "last_export"
+EXPORT_MENU_KEY = "export_menu"
 EXPORT_RECENT_WINDOW = timedelta(days=30)
 
 # Callback data comes back from the Telegram client, and a modified client can send anything,
@@ -105,6 +106,12 @@ class Draft:
             approach=self.approach,
             stuck=self.stuck,
         )
+
+
+@dataclass(frozen=True)
+class ExportMenu:
+    message_id: int
+    category: bool = False
 
 
 def parse_writeup_id(args: Sequence[str] | None) -> int | None:
@@ -210,10 +217,15 @@ class WriteupHandlers:
     # The /log conversation. Each step returns the next state; returning the same state
     # asks again after an invalid answer. Nothing touches the database until the last step.
 
-    async def log_start(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    async def log_start(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> int | None:
         # Also runs on /log mid-conversation (allow_reentry), replacing the old draft.
+        try:
+            await update.effective_message.reply_text(formatting.LOG_ASK_PLATFORM)
+        except TelegramError as exc:
+            logger.warning("Could not start /log (%s)", type(exc).__name__)
+            # None preserves the current step and reschedules its timeout on a failed restart.
+            return None if DRAFT_KEY in context.user_data else ConversationHandler.END
         context.user_data[DRAFT_KEY] = Draft()
-        await update.effective_message.reply_text(formatting.LOG_ASK_PLATFORM)
         return PLATFORM
 
     async def got_platform(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
@@ -363,12 +375,19 @@ class WriteupHandlers:
 
     async def cancel(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
         context.user_data.pop(DRAFT_KEY, None)
-        await update.effective_message.reply_text(formatting.LOG_CANCELLED)
+        try:
+            await update.effective_message.reply_text(formatting.LOG_CANCELLED)
+        except TelegramError as exc:
+            logger.warning("Could not send /log cancellation notice (%s)", type(exc).__name__)
         return ConversationHandler.END
 
     async def timed_out(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         context.user_data.pop(DRAFT_KEY, None)
-        await context.bot.send_message(self._config.owner_id, formatting.LOG_TIMED_OUT)
+        try:
+            await context.bot.send_message(self._config.owner_id, formatting.LOG_TIMED_OUT)
+        except TelegramError as exc:
+            # The timeout handler must return normally so PTB also clears the conversation.
+            logger.warning("Could not send /log timeout notice (%s)", type(exc).__name__)
 
     async def nothing_to_cancel(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         await update.effective_message.reply_text(formatting.NOTHING_TO_CANCEL)
@@ -510,17 +529,34 @@ class WriteupHandlers:
             self._db.release_hold(writeup_id, now)
             await query.edit_message_text(formatting.released(writeup_id))
 
-    # Export. Plain buttons like /delete, not a conversation: there is nothing to type, so
-    # there is no state to track and nothing to clash with a /log in progress.
+    # Export has its own menu state, separate from any /log in progress. Bind button replies
+    # to the latest prompt and consume it once, so queued double taps cannot export twice.
 
     async def export(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-        await update.effective_message.reply_text(
+        prompt = await update.effective_message.reply_text(
             formatting.EXPORT_ASK, reply_markup=EXPORT_KEYBOARD
         )
+        context.user_data[EXPORT_MENU_KEY] = ExportMenu(prompt.message_id)
+
+    async def _answer_export_button(
+        self, update: Update, context: ContextTypes.DEFAULT_TYPE, *, category: bool = False
+    ) -> bool:
+        query = update.callback_query
+        menu = context.user_data.get(EXPORT_MENU_KEY)
+        if menu is None or menu.message_id != query.message.message_id:
+            await self.expired_button(update, context)
+            return False
+        if menu.category != category:
+            # A queued answer from the previous step must not remove the current keyboard.
+            await query.answer(formatting.BUTTON_EXPIRED)
+            return False
+        await query.answer()
+        return True
 
     async def export_choice(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         query = update.callback_query
-        await query.answer()
+        if not await self._answer_export_button(update, context):
+            return
         match = EXPORT_DATA.fullmatch(query.data or "")
         if not match:
             return
@@ -530,7 +566,9 @@ class WriteupHandlers:
                 formatting.EXPORT_ASK_CATEGORY,
                 reply_markup=category_keyboard(self._categories, "exp:cat"),
             )
+            context.user_data[EXPORT_MENU_KEY] = ExportMenu(query.message.message_id, category=True)
             return
+        context.user_data.pop(EXPORT_MENU_KEY, None)
         now = self._clock()
         if choice == "all":
             await self._run_export(query, context, everything, now, moves_marker=True)
@@ -543,17 +581,26 @@ class WriteupHandlers:
 
     async def export_category(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         query = update.callback_query
-        await query.answer()
+        if not await self._answer_export_button(update, context, category=True):
+            return
         match = EXPORT_CATEGORY_DATA.fullmatch(query.data or "")
         index = int(match[1]) if match else -1
         if not 0 <= index < len(self._categories.order):
             return
+        context.user_data.pop(EXPORT_MENU_KEY, None)
         keep = in_category(self._categories.order[index])
         await self._run_export(query, context, keep, self._clock(), moves_marker=False)
 
     def _last_export(self) -> datetime | None:
         stored = self._db.get_state(LAST_EXPORT_KEY)
-        return from_db_time(stored) if stored else None
+        if not stored:
+            return None
+        try:
+            return from_db_time(stored)
+        except (ValueError, OverflowError):
+            # Prefer a repeated export to skipping writeups. Never log the damaged value.
+            logger.warning("Last export marker is unreadable; exporting all available writeups")
+            return None
 
     async def _run_export(
         self,
@@ -567,7 +614,7 @@ class WriteupHandlers:
         # After a one-category export the other categories' new writeups would be skipped.
         tz = self._config.timezone
         owner = self._config.owner_id
-        # Removing the buttons first means a double tap can't send the file twice.
+        # The menu was consumed before this call; remove its keyboard before building the file.
         await query.edit_message_text(formatting.EXPORT_WORKING)
         plan = plan_export(self._db.all_writeups(), keep, now)
         if not plan.ready:

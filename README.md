@@ -194,6 +194,9 @@ outbound HTTPS.
     restart the bot. Deleting a committed `.env` does **not** remove it from git history; the
     old token must be revoked.
 
+For hosting choices, including the limitations of Render's free plan, see
+[`docs/hosting.md`](docs/hosting.md).
+
 <p align="right">(<a href="#readme-top">back to top</a>)</p>
 
 <!-- USAGE -->
@@ -273,6 +276,9 @@ event, the manual entry is shown.
 Log unsolved attempts too: "where I got stuck" on a challenge you failed is the entry you
 learn most from, so `/log` requires it for unsolved challenges. A `/log` that sits idle for 30
 minutes is cancelled, and you are told. Nothing is saved until the last answer.
+
+Cancellation and timeout still end the conversation if Telegram can't deliver the notice.
+A failed attempt to restart `/log` keeps your current answers and question.
 
 `/stats` follows a simple rule you can check by hand:
 
@@ -384,6 +390,10 @@ Exported by [ctf-prep-bot](https://github.com/Antech-greyhat/ctf-prep-bot).
   accepts the file. A failed send can simply be retried. "Last 30 days" and "One category"
   leave it alone, because they don't cover everything new.
 * **An empty selection** replies "Nothing to export" and sends no file.
+* **Each menu sends at most one archive.** Starting `/export` again replaces the previous
+  menu. Buttons from older menus or before a bot restart expire.
+* **An unreadable export marker** makes "Since last export" include all available writeups,
+  so damaged state can cause repeats without losing entries. Held writeups stay excluded.
 
 `live_ctf` is the CTF's title, or `false` if the writeup wasn't from a live CTF. It stays after
 the hold ends, because the writeup still came from that CTF. A hold's end time isn't exported.
@@ -414,6 +424,10 @@ take precedence over `.env`.
 If anything required is missing or malformed, the bot refuses to start and names the variable
 without printing its value. The same goes for an invalid `events.toml` or `categories.toml`
 (exit code 2).
+
+Unreadable configuration files and invalid UTF-8 also stop startup with exit code 2.
+Numeric settings are checked before integer conversion, and `OWNER_ID` must fit Telegram's
+52-bit user ID range.
 
 <p align="right">(<a href="#readme-top">back to top</a>)</p>
 
@@ -469,7 +483,8 @@ control (CTFtime). This is what is protected and how.
   warning that logs only the event ID. `events.toml` is validated strictly at startup.
 * **Escaped.** Messages use HTML parse mode and every external string goes through
   `html.escape`.
-* **Safe links only.** Only `http://` and `https://` URLs are rendered, with a length cap.
+* **Safe links only.** Only `http://` and `https://` URLs with a host and valid port are
+  rendered, with a length cap. Control and invisible characters are rejected.
   Link previews are disabled.
 * **Clean text.** Terminal escape sequences, bidi overrides and zero-width characters are
   removed from titles.
@@ -482,6 +497,7 @@ control (CTFtime). This is what is protected and how.
 * **Private file.** The database file is created with permissions 600 (inside a 700 folder)
   before SQLite writes its first byte. If it is ever found readable by others, it is reset to
   600 at startup with a warning (Linux/macOS).
+  A database path that is a symlink or directory is refused before its permissions are changed.
 * **No flags.** There is no flag field, and flag-shaped text such as `picoCTF{...}` or
   `flag{...}` is replaced with `[flag removed]` before saving; the bot tells you how many it
   removed. A leaked or shared database then never publishes a flag. The pattern needs a

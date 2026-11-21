@@ -188,6 +188,68 @@ async def test_log_again_starts_fresh(tmp_path: Path) -> None:
         assert bot.app.user_data[OWNER][DRAFT_KEY].category == ""
 
 
+async def test_failed_log_start_leaves_no_draft_or_timeout(tmp_path: Path) -> None:
+    async with running_bot(tmp_path) as bot:
+        chat = bot.chat()
+        bot.telegram.failing.add("sendMessage")
+        await chat.send("/log")
+        bot.telegram.failing.clear()
+        assert DRAFT_KEY not in bot.app.user_data[OWNER]
+        assert not bot.log_conversation().timeout_jobs
+        await chat.send("/cancel")
+        assert bot.telegram.last_text() == formatting.NOTHING_TO_CANCEL
+        await save_one(bot)
+        assert len(bot.db.recent_writeups(5)) == 1
+
+
+async def test_failed_log_restart_preserves_the_current_answers(tmp_path: Path) -> None:
+    async with running_bot(tmp_path) as bot:
+        chat = bot.chat()
+        await log_until_notes(chat)
+        original = bot.app.user_data[OWNER][DRAFT_KEY]
+        bot.telegram.failing.add("sendMessage")
+        await chat.send("/log")
+        bot.telegram.failing.clear()
+        assert bot.app.user_data[OWNER][DRAFT_KEY] is original
+        assert bot.log_conversation().timeout_jobs
+        await chat.send("original approach")
+        await chat.send("/skip")
+        [saved] = bot.db.recent_writeups(5)
+        assert (saved.platform, saved.challenge, saved.category) == ("picoCTF", "Cookies", "Web")
+        assert saved.approach == "original approach"
+
+
+async def test_failed_cancel_confirmation_still_ends_the_conversation(tmp_path: Path) -> None:
+    async with running_bot(tmp_path) as bot:
+        chat = bot.chat()
+        await log_until_notes(chat)
+        bot.telegram.failing.add("sendMessage")
+        await chat.send("/cancel")
+        bot.telegram.failing.clear()
+        assert DRAFT_KEY not in bot.app.user_data[OWNER]
+        assert not bot.log_conversation().timeout_jobs
+        await chat.send("/cancel")
+        assert bot.telegram.last_text() == formatting.NOTHING_TO_CANCEL
+        assert not bot.db.recent_writeups(5)
+        await save_one(bot)
+        assert len(bot.db.recent_writeups(5)) == 1
+
+
+async def test_failed_timeout_notice_still_ends_the_conversation(tmp_path: Path) -> None:
+    async with running_bot(tmp_path) as bot:
+        chat = bot.chat()
+        await log_until_notes(chat)
+        [job] = bot.log_conversation().timeout_jobs.values()
+        bot.telegram.failing.add("sendMessage")
+        await job.run(bot.app)
+        bot.telegram.failing.clear()
+        assert DRAFT_KEY not in bot.app.user_data[OWNER]
+        assert not bot.log_conversation().timeout_jobs
+        await chat.send("/cancel")
+        assert bot.telegram.last_text() == formatting.NOTHING_TO_CANCEL
+        assert not bot.db.recent_writeups(5)
+
+
 async def test_idle_log_times_out_and_tells_the_owner(tmp_path: Path) -> None:
     async with running_bot(tmp_path) as bot:
         chat = bot.chat()

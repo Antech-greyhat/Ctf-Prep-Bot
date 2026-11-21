@@ -165,6 +165,26 @@ async def test_nudge_is_not_repeated_after_restart(db: Database) -> None:
     assert db.get_state(NUDGED_FOR_KEY) == to_db_time(START)
 
 
+@pytest.mark.parametrize(
+    "stored",
+    ["damaged-private-value", "2026-10-01T12:00:00", "0001-01-01T00:00:00+01:00"],
+)
+async def test_damaged_tracking_time_restarts_the_quiet_period(
+    db: Database, caplog: pytest.LogCaptureFixture, stored: str
+) -> None:
+    db.set_state(TRACKING_SINCE_KEY, stored)
+    clock = Clock(START + 5 * DAY)
+    jobs, bot = make_jobs(db, clock), FakeBot()
+    await jobs.nudge_job(SimpleNamespace(bot=bot))
+    assert bot.sent == []
+    assert db.get_state(TRACKING_SINCE_KEY) == to_db_time(clock.now)
+    assert "unreadable" in caplog.text
+    assert stored not in caplog.text
+    clock.now += 3 * DAY
+    await jobs.nudge_job(SimpleNamespace(bot=bot))
+    assert len(bot.sent) == 1
+
+
 async def test_failed_nudge_is_retried(db: Database) -> None:
     clock = Clock(START)
     jobs = make_jobs(db, clock)

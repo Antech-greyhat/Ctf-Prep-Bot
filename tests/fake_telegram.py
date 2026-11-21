@@ -34,6 +34,7 @@ class Call:
     params: dict[str, Any]
     # Uploaded files as field name -> (file name, bytes, content type).
     files: dict[str, Any] = field(default_factory=dict)
+    message_id: int | None = None
 
     @property
     def text(self) -> str:
@@ -88,7 +89,9 @@ class FakeTelegram(BaseRequest):
             return {"id": BOT_ID, "is_bot": True, "first_name": "Test", "username": "test_bot"}
         if name in {"sendMessage", "sendDocument", "editMessageText", "editMessageReplyMarkup"}:
             chat_id = params.get("chat_id", OWNER)
-            return bot_message(next(self._message_ids), int(chat_id), params.get("text", ""))
+            message_id = params.get("message_id") or next(self._message_ids)
+            self.calls[-1].message_id = int(message_id)
+            return bot_message(int(message_id), int(chat_id), params.get("text", ""))
         return True
 
     def sent(self, method: str = "sendMessage") -> list[Call]:
@@ -96,6 +99,18 @@ class FakeTelegram(BaseRequest):
 
     def last_text(self) -> str:
         return self.sent()[-1].text
+
+    def button_message_id(self, chat_id: int, data: str | None = None) -> int:
+        latest = None
+        for call in reversed(self.calls):
+            if call.buttons and call.params.get("chat_id") == chat_id and call.message_id:
+                if latest is None:
+                    latest = call.message_id
+                # /export can open another keyboard while /log is still waiting for a reply.
+                if data is None or any(value == data for _, value in call.buttons):
+                    return call.message_id
+        # Tampered data still needs a message, even when no button offered that value.
+        return latest or 1
 
 
 def user(user_id: int) -> dict[str, object]:
@@ -116,8 +131,15 @@ def bot_message(
 
 class Chat:
     # Builds updates as a given user would send them.
-    def __init__(self, app: Application, user_id: int = OWNER, chat_type: str = "private") -> None:
+    def __init__(
+        self,
+        app: Application,
+        telegram: FakeTelegram,
+        user_id: int = OWNER,
+        chat_type: str = "private",
+    ) -> None:
         self._app = app
+        self._telegram = telegram
         self._user_id = user_id
         self._chat_type = chat_type
         self._ids = itertools.count(1)
@@ -136,14 +158,16 @@ class Chat:
             message["entities"] = [{"type": "bot_command", "offset": 0, "length": len(command)}]
         await self._process({"update_id": number, "message": message})
 
-    async def press(self, data: str) -> None:
+    async def press(self, data: str, message_id: int | None = None) -> None:
         number = next(self._ids)
+        if message_id is None:
+            message_id = self._telegram.button_message_id(self._user_id, data)
         query = {
             "id": str(number),
             "from": user(self._user_id),
             "chat_instance": "test",
             "data": data,
-            "message": bot_message(number, self._user_id, "buttons", self._chat_type),
+            "message": bot_message(message_id, self._user_id, "buttons", self._chat_type),
         }
         await self._process({"update_id": number, "callback_query": query})
 
@@ -158,7 +182,7 @@ class Harness:
     db: Database
 
     def chat(self, user_id: int = OWNER, chat_type: str = "private") -> Chat:
-        return Chat(self.app, user_id, chat_type)
+        return Chat(self.app, self.telegram, user_id, chat_type)
 
     def log_conversation(self) -> ConversationHandler:
         return next(
