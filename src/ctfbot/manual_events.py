@@ -68,4 +68,7 @@ def _datetime(entry: dict[str, object], key: str, where: str) -> datetime:
     # Without an offset the moment in time would be ambiguous.
     if not isinstance(value, datetime) or value.tzinfo is None:
         raise ManualEventsError(f"{where}: '{key}' must be {DATETIME_HINT}")
-    return value.astimezone(UTC)
+    try:
+        return value.astimezone(UTC)
+    except OverflowError:
+        raise ManualEventsError(f"{where}: '{key}' is outside the supported UTC range") from None

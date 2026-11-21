@@ -52,7 +52,10 @@ def parse_utc(value: str) -> datetime:
         raise ValueError("not an ISO 8601 timestamp") from None
     if parsed.tzinfo is None:
         raise ValueError("timestamp has no UTC offset")
-    return parsed.astimezone(UTC)
+    try:
+        return parsed.astimezone(UTC)
+    except OverflowError:
+        raise ValueError("timestamp is outside the supported UTC range") from None
 
 
 def starting_within(events: list[Event], now: datetime, days: float) -> list[Event]:

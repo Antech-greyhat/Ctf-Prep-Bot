@@ -1,6 +1,6 @@
 import calendar
 import html
-from datetime import datetime
+from datetime import UTC, datetime
 from zoneinfo import ZoneInfo
 
 from ctfbot.config import DIGEST_DAYS, Config
@@ -83,7 +83,9 @@ def format_time_range(start: datetime, finish: datetime) -> str:
 
 
 def format_duration(start: datetime, finish: datetime) -> str:
-    hours = round((finish - start).total_seconds() / 3600)
+    # Subtracting datetimes with the same ZoneInfo uses wall time, ignoring clock changes.
+    elapsed = finish.astimezone(UTC) - start.astimezone(UTC)
+    hours = round(elapsed.total_seconds() / 3600)
     if hours < 48:
         return f"{hours}h"
     days, hours = divmod(hours, 24)

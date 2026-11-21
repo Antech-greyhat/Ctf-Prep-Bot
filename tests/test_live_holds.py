@@ -1,5 +1,6 @@
 # The live-CTF step in /log, the 🔒 markers and /release. Real Application, offline fakes.
 import html
+from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
@@ -190,6 +191,45 @@ async def test_event_button_from_an_old_list_is_stale(tmp_path: Path) -> None:
         assert bot.telegram.sent("answerCallbackQuery")[-1].params["text"] == (
             formatting.BUTTON_EXPIRED
         )
+
+
+@pytest.mark.parametrize(
+    ("steps", "data"),
+    [
+        ((), "log:live:no"),
+        (("log:live:yes",), "log:event:0"),
+        (("log:live:no", "Cookies"), "log:cat:1"),
+        (("log:live:no", "Cookies", "log:cat:1"), "log:solved"),
+    ],
+)
+async def test_old_buttons_cannot_answer_the_same_step_of_a_new_log(
+    tmp_path: Path, steps: tuple[str, ...], data: str
+) -> None:
+    async with running_bot(tmp_path, manual_events=[RUNNING], clock=FrozenClock(NOW)) as bot:
+        chat = bot.chat()
+
+        async def reach_step() -> None:
+            await to_live_question(chat)
+            for step in steps:
+                if step.startswith("log:"):
+                    await chat.press(step)
+                else:
+                    await chat.send(step)
+
+        await reach_step()
+        old_message_id = bot.telegram.button_message_id(OWNER)
+        await reach_step()
+        current_message_id = bot.telegram.button_message_id(OWNER)
+        before = replace(draft(bot))
+        await chat.press(data, message_id=old_message_id)
+        assert bot.telegram.sent("answerCallbackQuery")[-1].params["text"] == (
+            formatting.BUTTON_EXPIRED
+        )
+        assert draft(bot) == before
+
+        sent_before = len(bot.telegram.sent())
+        await chat.press(data, message_id=current_message_id)
+        assert len(bot.telegram.sent()) == sent_before + 1
 
 
 async def test_typing_at_the_button_steps(tmp_path: Path) -> None:
