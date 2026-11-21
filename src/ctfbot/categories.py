@@ -37,14 +37,16 @@ class Categories:
 
 
 def load_categories(path: Path) -> Categories:
-    if not path.exists():
-        logger.info("No categories file at %s; using the default order", path)
-        return Categories()
     try:
         with path.open("rb") as file:
             data = tomllib.load(file)
+    except FileNotFoundError:
+        logger.info("No categories file at %s; using the default order", path)
+        return Categories()
     except tomllib.TOMLDecodeError as exc:
         raise CategoriesError(f"{path}: invalid TOML: {exc}") from None
+    except (OSError, UnicodeError) as exc:
+        raise CategoriesError(f"{path}: could not read file ({type(exc).__name__})") from None
     return parse_categories(data, str(path))
 
 

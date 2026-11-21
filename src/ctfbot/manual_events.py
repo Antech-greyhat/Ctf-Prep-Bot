@@ -17,14 +17,16 @@ class ManualEventsError(Exception):
 
 
 def load_manual_events(path: Path) -> list[Event]:
-    if not path.exists():
-        logger.info("No manual events file at %s; showing CTFtime events only", path)
-        return []
     try:
         with path.open("rb") as file:
             data = tomllib.load(file)
+    except FileNotFoundError:
+        logger.info("No manual events file at %s; showing CTFtime events only", path)
+        return []
     except tomllib.TOMLDecodeError as exc:
         raise ManualEventsError(f"{path}: invalid TOML: {exc}") from None
+    except (OSError, UnicodeError) as exc:
+        raise ManualEventsError(f"{path}: could not read file ({type(exc).__name__})") from None
     events = parse_manual_events(data, str(path))
     logger.info("Loaded %d manual event(s) from %s", len(events), path)
     return events

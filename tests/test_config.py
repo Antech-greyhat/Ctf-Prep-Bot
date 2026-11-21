@@ -113,3 +113,40 @@ def test_main_fails_closed_on_bad_owner_without_leaking_token(
     captured = capsys.readouterr()
     assert "OWNER_ID" in captured.err
     assert FAKE_TOKEN not in captured.err + captured.out
+
+
+@pytest.mark.parametrize(
+    "name", ["OWNER_ID", "LOOKAHEAD_DAYS", "INACTIVITY_DAYS", "REMINDER_HOURS"]
+)
+def test_oversized_numeric_settings_fail_with_config_error(name: str) -> None:
+    with pytest.raises(ConfigError, match=name):
+        load_config(env(**{name: "9" * 5000}))
+
+
+def test_owner_id_must_fit_telegrams_52_bit_range() -> None:
+    with pytest.raises(ConfigError, match="OWNER_ID"):
+        load_config(env(OWNER_ID=str(1 << 52)))
+    assert load_config(env(OWNER_ID=str((1 << 52) - 1))).owner_id == (1 << 52) - 1
+
+
+@pytest.mark.parametrize("name", ["OWNER_ID", "LOOKAHEAD_DAYS", "REMINDER_HOURS"])
+def test_leading_zeroes_do_not_break_numeric_validation(name: str) -> None:
+    value = {"OWNER_ID": "424242", "LOOKAHEAD_DAYS": "14", "REMINDER_HOURS": "24"}[name]
+    assert load_config(env(**{name: "0" * 5000 + value})) == load_config(env())
+
+
+@pytest.mark.parametrize("name", ["EVENTS_FILE", "CATEGORIES_FILE", "DATABASE_PATH"])
+def test_invalid_file_paths_name_the_setting(name: str) -> None:
+    with pytest.raises(ConfigError, match=name):
+        load_config(env(**{name: "invalid\x00path"}))
+
+
+def test_unreadable_dotenv_exits_2_without_leaking_contents(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    (tmp_path / ".env").write_bytes(b"TELEGRAM_BOT_TOKEN=" + FAKE_TOKEN.encode() + b"\xff")
+    monkeypatch.chdir(tmp_path)
+    assert entry.main([]) == 2
+    captured = capsys.readouterr()
+    assert ".env" in captured.err
+    assert FAKE_TOKEN not in captured.err + captured.out

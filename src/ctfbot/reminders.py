@@ -83,7 +83,12 @@ class ReminderJobs:
     def tracking_since(self) -> datetime:
         stored = self._db.get_state(TRACKING_SINCE_KEY)
         if stored is not None:
-            return from_db_time(stored)
+            try:
+                return from_db_time(stored)
+            except (ValueError, OverflowError):
+                logger.warning(
+                    "Inactivity tracking time is unreadable; restarting the quiet period"
+                )
         now = self._clock()
         self._db.set_state(TRACKING_SINCE_KEY, to_db_time(now))
         return now

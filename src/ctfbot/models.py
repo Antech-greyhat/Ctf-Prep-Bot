@@ -28,13 +28,17 @@ class Event:
 
 
 def is_http_url(value: str) -> bool:
-    if len(value) > MAX_URL_LENGTH or any(ch.isspace() for ch in value):
+    if len(value) > MAX_URL_LENGTH or any(
+        ch.isspace() or unicodedata.category(ch).startswith("C") for ch in value
+    ):
         return False
     try:
         parts = urlsplit(value)
+        # Accessing port also validates its syntax and range.
+        _ = parts.port
     except ValueError:
         return False
-    return parts.scheme in ("http", "https") and bool(parts.netloc)
+    return parts.scheme in ("http", "https") and bool(parts.hostname)
 
 
 def clean_text(value: str, max_length: int = MAX_TITLE_LENGTH) -> str:

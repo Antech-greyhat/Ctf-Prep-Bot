@@ -135,7 +135,7 @@ class CtftimeClient:
                 await self._sleep(RETRY_BACKOFF_SECONDS * attempt)
             try:
                 response = await self._http.get(API_URL, params=params)
-            except httpx.TransportError as exc:
+            except httpx.RequestError as exc:
                 problem = type(exc).__name__
                 continue
             if response.status_code == 429 or response.status_code >= 500:

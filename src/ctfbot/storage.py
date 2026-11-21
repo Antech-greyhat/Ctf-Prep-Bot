@@ -5,10 +5,12 @@
 import logging
 import os
 import sqlite3
+import stat
 from collections import Counter
 from datetime import UTC, datetime
 from pathlib import Path
 
+from ctfbot.models import parse_utc
 from ctfbot.writeups import Writeup, WriteupDraft
 
 logger = logging.getLogger(__name__)
@@ -64,7 +66,7 @@ def to_db_time(moment: datetime) -> str:
 
 
 def from_db_time(value: str) -> datetime:
-    return datetime.fromisoformat(value).astimezone(UTC)
+    return parse_utc(value)
 
 
 class Database:
@@ -225,6 +227,11 @@ def _prepare_file(path: Path) -> None:
         # Windows ignores the mode; there the folder's ACL decides who can read the file.
         os.close(os.open(path, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600))
     except FileExistsError:
+        # Never chmod a directory or follow a symlink into an unrelated file.
+        if not stat.S_ISREG(path.lstat().st_mode):
+            raise StorageError(
+                f"database {path} must be a regular file, not a symlink or directory"
+            ) from None
         _tighten_permissions(path)
 
 

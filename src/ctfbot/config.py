@@ -18,6 +18,8 @@ DIGEST_DAYS = ("mon", "tue", "wed", "thu", "fri", "sat", "sun")
 MAX_LOOKAHEAD_DAYS = 365
 MAX_INACTIVITY_DAYS = 30
 MAX_REMINDER_HOURS = 168
+# Telegram user IDs have at most 52 significant bits.
+MAX_OWNER_ID = (1 << 52) - 1
 
 DEFAULTS = {
     "TIMEZONE": "Africa/Nairobi",
@@ -57,7 +59,10 @@ class Config:
 
 def read_environment() -> Mapping[str, str]:
     # override=False: real environment variables (e.g. from systemd) win over .env.
-    load_dotenv(Path.cwd() / ".env", override=False)
+    try:
+        load_dotenv(Path.cwd() / ".env", override=False)
+    except (OSError, UnicodeError) as exc:
+        raise ConfigError(f".env could not be read ({type(exc).__name__}).") from None
     return os.environ
 
 
@@ -80,9 +85,9 @@ def load_config(env: Mapping[str, str]) -> Config:
         lookahead_days=_whole_number(env, "LOOKAHEAD_DAYS", 1, MAX_LOOKAHEAD_DAYS),
         digest_day=_digest_day(_get(env, "DIGEST_DAY")),
         digest_time=_clock_time(env, "DIGEST_TIME"),
-        events_file=Path(_get(env, "EVENTS_FILE")),
-        database_path=Path(_get(env, "DATABASE_PATH")),
-        categories_file=Path(_get(env, "CATEGORIES_FILE")),
+        events_file=_file_path(env, "EVENTS_FILE"),
+        database_path=_file_path(env, "DATABASE_PATH"),
+        categories_file=_file_path(env, "CATEGORIES_FILE"),
         inactivity_days=_whole_number(env, "INACTIVITY_DAYS", 0, MAX_INACTIVITY_DAYS),
         nudge_time=_clock_time(env, "NUDGE_TIME"),
         reminder_hours=_whole_number(env, "REMINDER_HOURS", 0, MAX_REMINDER_HOURS),
@@ -97,9 +102,29 @@ def _owner_id(env: Mapping[str, str]) -> int:
     raw = env.get("OWNER_ID", "").strip()
     if not raw:
         raise ConfigError("OWNER_ID is not set. Run `python -m ctfbot --whoami` to find it.")
-    if not _DIGITS.fullmatch(raw) or int(raw) == 0:
+    value = _bounded_number(raw, 1, MAX_OWNER_ID)
+    if value is None:
         raise ConfigError("OWNER_ID must be a positive integer (your numeric Telegram user ID).")
-    return int(raw)
+    return value
+
+
+def _file_path(env: Mapping[str, str], name: str) -> Path:
+    raw = _get(env, name)
+    if "\x00" in raw:
+        raise ConfigError(f"{name} must be a valid file path.")
+    return Path(raw)
+
+
+def _bounded_number(raw: str, low: int, high: int) -> int | None:
+    if not _DIGITS.fullmatch(raw):
+        return None
+    # Bound the conversion first: Python rejects integers with thousands of digits.
+    # Removing leading zeroes preserves otherwise valid values without a large conversion.
+    digits = raw.lstrip("0") or "0"
+    if len(digits) > len(str(high)):
+        return None
+    value = int(digits)
+    return value if low <= value <= high else None
 
 
 def _timezone(raw: str) -> ZoneInfo:
@@ -112,10 +137,10 @@ def _timezone(raw: str) -> ZoneInfo:
 
 
 def _whole_number(env: Mapping[str, str], name: str, low: int, high: int) -> int:
-    raw = _get(env, name)
-    if not _DIGITS.fullmatch(raw) or not low <= int(raw) <= high:
+    value = _bounded_number(_get(env, name), low, high)
+    if value is None:
         raise ConfigError(f"{name} must be a whole number from {low} to {high}.")
-    return int(raw)
+    return value
 
 
 def _digest_day(raw: str) -> str:

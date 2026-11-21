@@ -207,6 +207,36 @@ def test_non_database_file_is_refused(tmp_path: Path) -> None:
         open_database(path)
 
 
+@posix_only
+def test_database_directory_is_refused_without_changing_its_permissions(tmp_path: Path) -> None:
+    path = tmp_path / "directory.db"
+    path.mkdir(mode=0o755)
+    mode = stat.S_IMODE(path.stat().st_mode)
+    with pytest.raises(StorageError):
+        open_database(path)
+    assert stat.S_IMODE(path.stat().st_mode) == mode
+
+
+@posix_only
+@pytest.mark.parametrize("dangling", [False, True])
+def test_database_symlink_is_refused_without_touching_its_target(
+    tmp_path: Path, dangling: bool
+) -> None:
+    target = tmp_path / "target.db"
+    if not dangling:
+        open_database(target).close()
+        target.chmod(0o644)
+    link = tmp_path / "link.db"
+    link.symlink_to(target)
+    with pytest.raises(StorageError), closing(open_database(link)):
+        pass
+    assert link.is_symlink()
+    if dangling:
+        assert not target.exists()
+    else:
+        assert stat.S_IMODE(target.stat().st_mode) == 0o644
+
+
 def test_secure_delete_is_on(db: Database) -> None:
     assert db._conn.execute("PRAGMA secure_delete").fetchone()[0] == 1
 
@@ -254,6 +284,13 @@ def test_times_round_trip_in_utc() -> None:
 def test_naive_times_are_rejected() -> None:
     with pytest.raises(ValueError, match="timezone-aware"):
         to_db_time(datetime(2026, 1, 1))
+
+
+def test_naive_stored_times_are_rejected_without_echoing_them() -> None:
+    value = "2026-10-16T12:00:00"
+    with pytest.raises(ValueError) as info:
+        from_db_time(value)
+    assert value not in str(info.value)
 
 
 # Holds and the upgrade from schema version 1 -----------------------------------------------
